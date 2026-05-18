@@ -2408,7 +2408,7 @@ tray.run()
             
             downloading = true;
             downloadProgress = 0f;
-    
+            
             try
             {
                 using var client = new HttpClient();
@@ -2430,7 +2430,7 @@ tray.run()
                     if (totalBytes > 0) downloadProgress = (float)totalRead / totalBytes;
                 }
 
-                // hash check
+                // Hash verification (optional)
                 if (!string.IsNullOrEmpty(expectedHash))
                 {
                     fs.Seek(0, SeekOrigin.Begin);
@@ -2448,72 +2448,124 @@ tray.run()
                 }
                 fs.Close();
 
-                // extract
-                string extractDir = Path.Combine(Path.GetTempPath(), "VRCUFM_new");
-                if (Directory.Exists(extractDir)) Directory.Delete(extractDir, true);
-                Directory.CreateDirectory(extractDir);
-                ZipFile.ExtractToDirectory(tempZip, extractDir);
+                // Extract to a staging folder (not the final app folder)
+                string stagingDir = Path.Combine(Path.GetTempPath(), "VRCUFM_staging");
+                if (Directory.Exists(stagingDir)) Directory.Delete(stagingDir, true);
+                Directory.CreateDirectory(stagingDir);
+                ZipFile.ExtractToDirectory(tempZip, stagingDir);
                 File.Delete(tempZip);
 
-                // find exe recursively
+                // Find new exe inside staging
                 bool isWin = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-                string[] names = isWin
+                string[] exeNames = isWin
                     ? new[] { "VRChatUnfriendManager.exe", "Unfriendmaxxing.exe" }
                     : new[] { "VRChatUnfriendManager", "Unfriendmaxxing" };
 
-                string? newExe = null;
-                foreach (var name in names)
+                string? newExeInStaging = null;
+                foreach (var name in exeNames)
                 {
-                    newExe = Directory.GetFiles(extractDir, name, SearchOption.AllDirectories)
-                        .FirstOrDefault();
-                    if (newExe != null) break;
+                    newExeInStaging = Directory.GetFiles(stagingDir, name, SearchOption.AllDirectories).FirstOrDefault();
+                    if (newExeInStaging != null) break;
                 }
-                // fallback: first .exe (Windows) or file with execute permission
-                if (newExe == null && isWin)
-                    newExe = Directory.GetFiles(extractDir, "*.exe", SearchOption.AllDirectories).FirstOrDefault();
-                if (newExe == null)
+                if (newExeInStaging == null && isWin)
+                    newExeInStaging = Directory.GetFiles(stagingDir, "*.exe", SearchOption.AllDirectories).FirstOrDefault();
+
+                if (newExeInStaging == null)
                 {
                     MessageBox.Show("Could not find executable in the update archive.",
                         "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
 
-                string current = Process.GetCurrentProcess().MainModule?.FileName ?? "";
-                if (string.IsNullOrEmpty(current))
+                string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                if (string.IsNullOrEmpty(currentExe))
                 {
-                    MessageBox.Show("Cannot determine current exe path.", "Update Failed",
+                    MessageBox.Show("Cannot determine current executable path.", "Update Failed",
                         MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
-                string appDir = Path.GetDirectoryName(current)!;
 
-                // backup old exe
-                string backup = current + ".old";
-                if (File.Exists(backup)) File.Delete(backup);
-                File.Move(current, backup);
+                string appDir = Path.GetDirectoryName(currentExe)!;
+                int currentPid = Environment.ProcessId;
 
-                // copy all files from extractDir to appDir
-                foreach (string file in Directory.GetFiles(extractDir, "*", SearchOption.AllDirectories))
+                // --- Build the restart/update script ---
+                string scriptPath;
+                string scriptArgs;
+
+                if (isWin)
                 {
-                    string rel = Path.GetRelativePath(extractDir, file);
-                    string dest = Path.Combine(appDir, rel);
-                    Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                    File.Copy(file, dest, true);
-                }
-                Directory.Delete(extractDir, true);
+                    // PowerShell script that waits for old process to exit, then copies files and restarts
+                    scriptPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update.ps1");
+                    string psScript = $@"
+param([int]$pidToWait, [string]$sourceDir, [string]$destDir, [string]$exeName)
 
-                // launch
-                string finalExe = Path.Combine(appDir, Path.GetFileName(newExe));
-                Process.Start(finalExe);
+# Wait for the old process to fully exit
+Wait-Process -Id $pidToWait -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+
+# Copy all files from source to destination (overwrite)
+Copy-Item -Path ""$sourceDir\*"" -Destination $destDir -Recurse -Force
+
+# Clean up
+Remove-Item -Recurse -Force $sourceDir
+Remove-Item -Force ""{scriptPath}""
+
+# Restart
+Start-Process -FilePath ""$destDir\$exeName""
+".Trim();
+                    File.WriteAllText(scriptPath, psScript);
+
+                    string exeRelativeName = Path.GetFileName(newExeInStaging);
+                    scriptArgs = $"-NoProfile -ExecutionPolicy Bypass -File \"{scriptPath}\" -pidToWait {currentPid} -sourceDir \"{stagingDir}\" -destDir \"{appDir}\" -exeName \"{exeRelativeName}\"";
+                    Process.Start(new ProcessStartInfo("powershell.exe", scriptArgs)
+                    {
+                        WindowStyle = ProcessWindowStyle.Hidden,
+                        CreateNoWindow = true,
+                        UseShellExecute = false
+                    });
+                }
+                else
+                {
+                    // Bash script for Linux
+                    scriptPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update.sh");
+                    string bashScript = $@"#!/bin/bash
+PID_TO_WAIT={currentPid}
+SOURCE_DIR=""{stagingDir.Replace("\"", "\\\"")}""
+DEST_DIR=""{appDir.Replace("\"", "\\\"")}""
+EXE_NAME=""{Path.GetFileName(newExeInStaging).Replace("\"", "\\\"")}""
+SCRIPT_PATH=""{scriptPath.Replace("\"", "\\\"")}""
+
+# Wait for old process
+while kill -0 $PID_TO_WAIT 2>/dev/null; do sleep 1; done
+sleep 2
+
+# Copy files
+cp -rf ""$SOURCE_DIR""/* ""$DEST_DIR""
+
+# Clean up
+rm -rf ""$SOURCE_DIR""
+rm -f ""$SCRIPT_PATH""
+
+# Restart
+cd ""$DEST_DIR"" && chmod +x ""$EXE_NAME"" && ./""$EXE_NAME"" &
+".Trim();
+                    File.WriteAllText(scriptPath, bashScript);
+                    // Mark executable
+                    Process.Start("chmod", $"+x \"{scriptPath}\"").WaitForExit(500);
+                    Process.Start(new ProcessStartInfo("/bin/bash", scriptPath)
+                    {
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    });
+                }
+
+                // Exit current process immediately – the script takes over
                 Environment.Exit(0);
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Update failed:\n{ex.Message}", "Update Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-            finally
-            {
                 downloading = false;
                 downloadProgress = 0f;
             }
