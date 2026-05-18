@@ -2,16 +2,55 @@
 
     <PropertyGroup>
         <OutputType>Exe</OutputType>
+        <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <TargetFramework>net9.0-windows10.0.17763.0</TargetFramework>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <UseWindowsForms>true</UseWindowsForms>
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+
+        <!-- Windows: embed icon into the .exe so it shows in Explorer -->
+        <ApplicationIcon Condition="$([MSBuild]::IsOsPlatform('Windows'))">icon.ico</ApplicationIcon>
+
+        <!-- Version info -->
+        <Version>1.0.0</Version>
+        <AssemblyVersion>1.0.0.0</AssemblyVersion>
+        <FileVersion>1.0.0.0</FileVersion>
+        <Product>VRChat Unfriend Manager</Product>
+        <Description>Manage and unfriend VRChat friends</Description>
+        <AssemblyName>VRCUFM</AssemblyName>
+        <RootNamespace>VRCUFM</RootNamespace>
+    </PropertyGroup>
+
+    <!-- Windows: DPI-aware manifest so the exe icon renders properly -->
+    <PropertyGroup Condition="$([MSBuild]::IsOsPlatform('Windows'))">
+        <ApplicationManifest>app.manifest</ApplicationManifest>
     </PropertyGroup>
 
     <ItemGroup>
-      <PackageReference Include="Microsoft.Toolkit.Uwp.Notifications" Version="7.1.3" />
-      <PackageReference Include="Terminal.Gui" Version="1.19.0" />
-      <PackageReference Include="VRChat" Version="1.0.0" />
-      <PackageReference Include="VRChat.API" Version="1.20.4" />
+        <!-- Cross Platform GUI Libraries -->
+        <PackageReference Include="Raylib-cs" Version="7.0.2" />
+        <PackageReference Include="rlImgui-cs" Version="3.2.0" />
+        <PackageReference Include="ImGui.NET" Version="1.91.6.1" />
+        <PackageReference Include="Microsoft.Data.Sqlite" Version="8.*" />
+        <!-- VRChat API -->
+        <PackageReference Include="VRChat.API" Version="1.20.4" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <!-- Embed icons into the assembly (existing behaviour) -->
+        <None Remove="icon.png" />
+        <EmbeddedResource Include="icon.png">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </EmbeddedResource>
+        <None Remove="icon.ico" />
+        <EmbeddedResource Include="icon.ico">
+            <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        </EmbeddedResource>
+    </ItemGroup>
+
+    <ItemGroup>
+      <Content Include=".github\workflows\release.yml" />
     </ItemGroup>
 
 </Project>
