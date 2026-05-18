@@ -23,7 +23,7 @@
     *   **Rate-Limit Protection:** Operations include randomized delays (5-10 seconds) to keep your account safe from API spam detection.
     *   **Pause/Resume:** Need to stop? Pause the operation at any time and resume when ready.
 *   **JSON Backups:** One-click backup of your currently displayed list to a timestamped `.json` file.
-*   **Auto Updater:** One-Click Update from one build to another simplified by a singular button
+*   **Auto Updater:** One-Click Update from one build to another simplified by a singular button.
 ## 📋 Requirements
 
 *   **[.NET 6.0 Runtime (or newer)](https://dotnet.microsoft.com/en-us/download/dotnet/9.0)**
