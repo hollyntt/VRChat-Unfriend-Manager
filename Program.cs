@@ -1,5 +1,6 @@
 ﻿using System.Diagnostics;
 using System.Drawing;
+using System.IO.Compression;
 using System.Net;
 using System.Numerics;
 using System.Reflection;
@@ -2328,14 +2329,15 @@ tray.run()
             updateAvailable = false;
             latestVersion = "";
             downloadUrl = "";
-            expectedHash = "";   // reset on each check
+            expectedHash = "";
 
             try
             {
                 using var client = new HttpClient();
                 client.DefaultRequestHeaders.UserAgent.ParseAdd("Unfriendmaxxing-Updater");
 
-                var response = await client.GetAsync("https://api.github.com/repos/hollyntt/VRChat-Unfriend-Manager/releases/latest");
+                var response = await client.GetAsync(
+                    "https://api.github.com/repos/hollyntt/VRChat-Unfriend-Manager/releases/latest");
                 var json = await response.Content.ReadAsStringAsync();
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
@@ -2346,38 +2348,43 @@ tray.run()
                 foreach (var asset in assets.EnumerateArray())
                 {
                     var name = asset.GetProperty("name").GetString() ?? "";
-                    var url = asset.GetProperty("browser_download_url").GetString() ?? "";
+                    var url  = asset.GetProperty("browser_download_url").GetString() ?? "";
 
-                    if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                    // Main release archive (zip)
+                    if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                     {
                         downloadUrl = url;
                         updateAvailable = true;
                     }
+                    // SHA‑256 checksum file (optional)
                     else if (name.EndsWith(".sha256", StringComparison.OrdinalIgnoreCase))
                     {
-                        // Download the hash file content
                         try
                         {
                             var hashResponse = await client.GetAsync(url);
                             var hashContent = await hashResponse.Content.ReadAsStringAsync();
-                            // The hash file is expected to contain just the hex string (maybe with a newline)
-                            expectedHash = hashContent.Trim();
+                            expectedHash = hashContent.Trim();   // just the hex digest
                         }
                         catch
                         {
-                            // If we can't get the hash, ignore – still allow update but no verification
-                            expectedHash = "";
+                            expectedHash = "";   // if missing, skip verification
                         }
                     }
                 }
             }
-            catch { }
-            finally { checkingForUpdate = false; }
+            catch
+            {
+                // Network or API error – treat as no update available
+            }
+            finally
+            {
+                checkingForUpdate = false;
+            }
         }
-
         static async Task DownloadAndInstallUpdateAsync()
         {
-            if (string.IsNullOrEmpty(downloadUrl)) return;
+            if (string.IsNullOrEmpty(downloadUrl))
+                return;
 
             downloading = true;
             downloadProgress = 0f;
@@ -2385,16 +2392,16 @@ tray.run()
             try
             {
                 using var client = new HttpClient();
-                var tempPath = Path.Combine(Path.GetTempPath(), "Unfriendmaxxing_new.exe");
+                var tempZip = Path.Combine(Path.GetTempPath(), "VRCUFM_update.zip");
 
                 using var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
                 response.EnsureSuccessStatusCode();
 
-                var totalBytes = response.Content.Headers.ContentLength ?? 0;
+                long totalBytes = response.Content.Headers.ContentLength ?? 0;
                 using var contentStream = await response.Content.ReadAsStreamAsync();
 
-                // Write the downloaded data to a temp file
-                using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 8192, true);
+                using var fileStream = new FileStream(tempZip, FileMode.Create, FileAccess.ReadWrite,
+                                                     FileShare.None, 8192, true);
 
                 var buffer = new byte[8192];
                 long totalRead = 0;
@@ -2408,10 +2415,9 @@ tray.run()
                         downloadProgress = (float)totalRead / totalBytes;
                 }
 
-                // --- HASH VERIFICATION ---
+                // --- HASH VERIFICATION (if available) ---
                 if (!string.IsNullOrEmpty(expectedHash))
                 {
-                    // Reset stream position to compute hash
                     fileStream.Seek(0, SeekOrigin.Begin);
                     using var sha256 = SHA256.Create();
                     byte[] hashBytes = await sha256.ComputeHashAsync(fileStream);
@@ -2419,11 +2425,11 @@ tray.run()
 
                     if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
                     {
-                        // Hash mismatch – abort
                         fileStream.Close();
-                        File.Delete(tempPath);
+                        File.Delete(tempZip);
                         MessageBox.Show(
-                            $"Downloaded file does not match the expected checksum.\n\nExpected: {expectedHash}\nGot: {actualHash}",
+                            $"Downloaded archive does not match the expected checksum.\n\n" +
+                            $"Expected: {expectedHash}\nGot: {actualHash}",
                             "Update Error – Hash Mismatch",
                             MessageBoxButtons.OK,
                             MessageBoxIcon.Error);
@@ -2431,25 +2437,64 @@ tray.run()
                     }
                 }
 
-                // Flush and close the file before moving it
-                fileStream.Close();
+                fileStream.Close();   // release the file for extraction
 
-                var currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? "";
-                if (!string.IsNullOrEmpty(currentExe))
+                // --- EXTRACT ZIP TO TEMP DIRECTORY ---
+                string extractDir = Path.Combine(Path.GetTempPath(), "VRCUFM_new");
+                if (Directory.Exists(extractDir))
+                    Directory.Delete(extractDir, true);
+                Directory.CreateDirectory(extractDir);
+
+                ZipFile.ExtractToDirectory(tempZip, extractDir);
+                File.Delete(tempZip);   // clean up the downloaded zip
+
+                // --- REPLACE CURRENT APPLICATION ---
+                string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                if (string.IsNullOrEmpty(currentExe))
                 {
-                    var backup = currentExe + ".bak";
-                    if (File.Exists(backup)) File.Delete(backup);
-                    File.Move(currentExe, backup);
-                    File.Move(tempPath, currentExe);
-
-                    MessageBox.Show("Update installed successfully!\nThe program will now restart.",
-                        "Update Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    Application.Restart();
+                    MessageBox.Show("Cannot determine current executable path.", "Update Failed",
+                                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
                 }
+
+                string appDir = Path.GetDirectoryName(currentExe) ?? "";
+                string newExePath = Path.Combine(extractDir, Path.GetFileName(currentExe));
+
+                if (!File.Exists(newExePath))
+                {
+                    MessageBox.Show("The update archive does not contain the main executable.",
+                                    "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                // 1. Rename current exe to backup (.old)
+                string backupExe = currentExe + ".old";
+                if (File.Exists(backupExe))
+                    File.Delete(backupExe);
+                File.Move(currentExe, backupExe);
+
+                // 2. Copy all new files over the top (overwriting old ones)
+                foreach (string newFilePath in Directory.GetFiles(extractDir, "*", SearchOption.AllDirectories))
+                {
+                    string relativePath = Path.GetRelativePath(extractDir, newFilePath);
+                    string destPath = Path.Combine(appDir, relativePath);
+
+                    Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
+                    File.Copy(newFilePath, destPath, true);
+                }
+
+                // 3. Clean up the temp extraction folder
+                Directory.Delete(extractDir, true);
+
+                // 4. Launch the new version and exit
+                Process.Start(newExePath);
+                Application.Exit();        // in case we're on the GUI thread
+                Environment.Exit(0);
             }
             catch (Exception ex)
             {
-                MessageBox.Show($"Update failed: {ex.Message}", "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show($"Update failed:\n{ex.Message}", "Update Error",
+                                MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
@@ -3100,7 +3145,8 @@ tray.run()
 
             try
             {
-                File.WriteAllText(Paths.ConfigFile, JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }));
+                File.WriteAllText(Paths.ConfigFile,
+                    JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }));
             }
             catch { }
         }
