@@ -4,6 +4,7 @@ using System.Net;
 using System.Numerics;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;    // ← new for update hash verification
 using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
@@ -874,6 +875,7 @@ namespace Unfriendmaxxing
         static bool updateAvailable = false;
         static string latestVersion = "";
         static string downloadUrl = "";
+        static string expectedHash = "";   // expected SHA‑256 hex string from release
         static float downloadProgress = 0f;
         static bool downloading = false;
 
@@ -2319,13 +2321,14 @@ tray.run()
             }
         }
 
-        // ==================== UPDATE MANAGER METHODS ====================
+        // ==================== UPDATE MANAGER (WITH HASH VERIFICATION) ====================
         static async Task CheckForUpdatesAsync()
         {
             checkingForUpdate = true;
             updateAvailable = false;
             latestVersion = "";
             downloadUrl = "";
+            expectedHash = "";   // reset on each check
 
             try
             {
@@ -2343,11 +2346,28 @@ tray.run()
                 foreach (var asset in assets.EnumerateArray())
                 {
                     var name = asset.GetProperty("name").GetString() ?? "";
+                    var url = asset.GetProperty("browser_download_url").GetString() ?? "";
+
                     if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
                     {
-                        downloadUrl = asset.GetProperty("browser_download_url").GetString() ?? "";
+                        downloadUrl = url;
                         updateAvailable = true;
-                        break;
+                    }
+                    else if (name.EndsWith(".sha256", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Download the hash file content
+                        try
+                        {
+                            var hashResponse = await client.GetAsync(url);
+                            var hashContent = await hashResponse.Content.ReadAsStringAsync();
+                            // The hash file is expected to contain just the hex string (maybe with a newline)
+                            expectedHash = hashContent.Trim();
+                        }
+                        catch
+                        {
+                            // If we can't get the hash, ignore – still allow update but no verification
+                            expectedHash = "";
+                        }
                     }
                 }
             }
@@ -2372,7 +2392,9 @@ tray.run()
 
                 var totalBytes = response.Content.Headers.ContentLength ?? 0;
                 using var contentStream = await response.Content.ReadAsStreamAsync();
-                using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
+
+                // Write the downloaded data to a temp file
+                using var fileStream = new FileStream(tempPath, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 8192, true);
 
                 var buffer = new byte[8192];
                 long totalRead = 0;
@@ -2386,6 +2408,32 @@ tray.run()
                         downloadProgress = (float)totalRead / totalBytes;
                 }
 
+                // --- HASH VERIFICATION ---
+                if (!string.IsNullOrEmpty(expectedHash))
+                {
+                    // Reset stream position to compute hash
+                    fileStream.Seek(0, SeekOrigin.Begin);
+                    using var sha256 = SHA256.Create();
+                    byte[] hashBytes = await sha256.ComputeHashAsync(fileStream);
+                    string actualHash = BitConverter.ToString(hashBytes).Replace("-", "").ToLowerInvariant();
+
+                    if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Hash mismatch – abort
+                        fileStream.Close();
+                        File.Delete(tempPath);
+                        MessageBox.Show(
+                            $"Downloaded file does not match the expected checksum.\n\nExpected: {expectedHash}\nGot: {actualHash}",
+                            "Update Error – Hash Mismatch",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Error);
+                        return;
+                    }
+                }
+
+                // Flush and close the file before moving it
+                fileStream.Close();
+
                 var currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? "";
                 if (!string.IsNullOrEmpty(currentExe))
                 {
@@ -2394,7 +2442,8 @@ tray.run()
                     File.Move(currentExe, backup);
                     File.Move(tempPath, currentExe);
 
-                    MessageBox.Show("Update installed successfully!\nThe program will now restart.", "Update Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    MessageBox.Show("Update installed successfully!\nThe program will now restart.",
+                        "Update Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     Application.Restart();
                 }
             }
