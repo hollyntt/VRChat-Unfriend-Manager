@@ -18,8 +18,8 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          # Note: If 10.0.x is too new/unavailable on the runner, change to '8.0.x' or '9.0.x'
-          dotnet-version: '10.0.x'
+          # Using 9.0.x for stability as 10.0 is in early preview
+          dotnet-version: '9.0.x'
 
       - name: Restore dependencies
         run: dotnet restore
@@ -32,7 +32,7 @@ jobs:
           echo "Building version: $hash"
         shell: powershell
 
-      - name: Build Windows x64 (Single File)
+      - name: Build Windows x64
         run: |
           dotnet publish -c Release -r win-x64 --self-contained true `
             -p:PublishSingleFile=true `
@@ -44,17 +44,29 @@ jobs:
             -o ./publish
         shell: powershell
 
+      - name: Prepare and Zip Bundle
+        run: |
+          # Copy icons to the publish folder if they exist in the root
+          if (Test-Path "icon.ico") { Copy-Item "icon.ico" "./publish/" }
+          if (Test-Path "icon.png") { Copy-Item "icon.png" "./publish/" }
+          
+          # Zip the entire publish directory
+          Compress-Archive -Path ./publish/* -DestinationPath ./VRCUFM-win-x64.zip
+        shell: powershell
+
       - name: Create/Update Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: ./publish/VRCUFM.exe
+          artifacts: ./VRCUFM-win-x64.zip
           tag: v${{ steps.version.outputs.version }}
           name: v${{ steps.version.outputs.version }}
           body: |
             Automated build from commit ${{ github.sha }}
             
-            **Asset:**
-            - `VRCUFM.exe` — Single-file Windows executable
+            **Assets included in .zip:**
+            - `VRCUFM.exe` (Main Application)
+            - `raylib.dll`, `cimgui.dll`, `e_sqlite3.dll` (Native dependencies)
+            - `icon.ico`, `icon.png` (App resources)
           prerelease: false
           allowUpdates: true
           makeLatest: true
