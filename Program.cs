@@ -1261,7 +1261,7 @@ tray.run()
         {
             bool isAutostart = args.Contains("--autostart");
 
-#if !DEBUG
+#if !RELEASE
             try { var h = GetConsoleWindow(); if (h != IntPtr.Zero) ShowWindow(h, SW_HIDE); } catch { }
 #endif
 
