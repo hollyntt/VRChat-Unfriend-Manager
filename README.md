@@ -1,4 +1,4 @@
-﻿# VRChat Unfriend Manager (VRC:UFM)
+# VRChat Unfriend Manager (VRC:UFM)
 
 > Copyright © 2025 [hollynt]
 > This work is free. You can redistribute it and/or modify it under the
