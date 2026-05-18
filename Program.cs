@@ -5,7 +5,7 @@ using System.Net;
 using System.Numerics;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;    // ← new for update hash verification
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Windows.Forms;
@@ -73,7 +73,7 @@ namespace Unfriendmaxxing
         public bool RunOnStartup { get; set; } = false;
         public bool VrcxStartupDesktop { get; set; } = false;
         public bool VrcxStartupVr { get; set; } = false;
-        public bool HideInTaskbar { get; set; } = true;   // Tray toggle
+        public bool HideInTaskbar { get; set; } = true;
         public List<string> ExcludedFavGroups { get; set; } = new();
 
         public bool AutoDeclineFriendRequests { get; set; } = false;
@@ -835,7 +835,6 @@ namespace Unfriendmaxxing
                     string v = attr.InformationalVersion;
                     return v.Length >= 7 ? v[..7] : v;
                 }
-                // dev fallback
                 try
                 {
                     using var p = Process.Start(new ProcessStartInfo("git", "rev-parse --short=7 HEAD")
@@ -898,17 +897,15 @@ namespace Unfriendmaxxing
         static bool autoDecline = false;
         static bool autoSendBack = false;
         static bool onlyStrangers = true;
-
-        // Update Manager
+        
         static bool checkingForUpdate = false;
         static bool updateAvailable = false;
         static string latestVersion = "";
         static string downloadUrl = "";
-        static string expectedHash = "";   // expected SHA‑256 hex string from release
+        static string expectedHash = "";
         static float downloadProgress = 0f;
         static bool downloading = false;
 
-        // ==================== MINIMIZE TO TRAY HOOK ====================
         [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
         [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int cmd);
         [DllImport("user32.dll")] static extern IntPtr FindWindow(string? cls, string wnd);
@@ -959,7 +956,6 @@ namespace Unfriendmaxxing
             }
             return CallWindowProc(originalWndProc, hWnd, msg, wParam, lParam);
         }
-        // ============================================================
 
         static bool windowVisible = true;
         static bool _showRequested = false;
@@ -1077,7 +1073,6 @@ namespace Unfriendmaxxing
                         if (path.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
                             return new Icon(path);
 
-                        // Convert png to icon
                         using var bmp = new Bitmap(path);
                         return Icon.FromHandle(bmp.GetHicon());
                     }
@@ -2348,157 +2343,144 @@ tray.run()
                 }
             }
         }
+        
 
-        // ==================== UPDATE MANAGER (WITH HASH VERIFICATION) ====================
-static async Task CheckForUpdatesAsync()
-{
-    checkingForUpdate = true;
-    updateAvailable = false;
-    latestVersion = "";
-    downloadUrl = "";
-    expectedHash = "";
-
-    try
-    {
-        using var client = new HttpClient();
-        client.DefaultRequestHeaders.UserAgent.ParseAdd("Unfriendmaxxing-Updater");
-        var response = await client.GetAsync(
-            "https://api.github.com/repos/hollyntt/VRChat-Unfriend-Manager/releases/latest");
-        var json = await response.Content.ReadAsStringAsync();
-        using var doc = JsonDocument.Parse(json);
-        var root = doc.RootElement;
-
-        string tag = root.GetProperty("tag_name").GetString() ?? "";
-        latestVersion = tag.TrimStart('v');
-
-        if (latestVersion == AppVersion)
+        static async Task CheckForUpdatesAsync()
         {
+            checkingForUpdate = true;
             updateAvailable = false;
-            return;
-        }
+            latestVersion = "";
+            downloadUrl = "";
+            expectedHash = "";
 
-        foreach (var asset in root.GetProperty("assets").EnumerateArray())
-        {
-            var name = asset.GetProperty("name").GetString() ?? "";
-            var url  = asset.GetProperty("browser_download_url").GetString() ?? "";
-            if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+            try
             {
-                downloadUrl = url;
-                updateAvailable = true;
-            }
-            else if (name.EndsWith(".sha256", StringComparison.OrdinalIgnoreCase))
-            {
-                try
+                using var client = new HttpClient();
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("Unfriendmaxxing-Updater");
+                var response = await client.GetAsync(
+                    "https://api.github.com/repos/hollyntt/VRChat-Unfriend-Manager/releases/latest");
+                var json = await response.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+
+                string tag = root.GetProperty("tag_name").GetString() ?? "";
+                latestVersion = tag.TrimStart('v');
+
+                if (latestVersion == AppVersion)
                 {
-                    var hr = await client.GetAsync(url);
-                    expectedHash = (await hr.Content.ReadAsStringAsync()).Trim();
+                    updateAvailable = false;
+                    return;
                 }
-                catch { }
+
+                foreach (var asset in root.GetProperty("assets").EnumerateArray())
+                {
+                    var name = asset.GetProperty("name").GetString() ?? "";
+                    var url  = asset.GetProperty("browser_download_url").GetString() ?? "";
+                    if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                    {
+                        downloadUrl = url;
+                        updateAvailable = true;
+                    }
+                    else if (name.EndsWith(".sha256", StringComparison.OrdinalIgnoreCase))
+                    {
+                        try
+                        {
+                            var hr = await client.GetAsync(url);
+                            expectedHash = (await hr.Content.ReadAsStringAsync()).Trim();
+                        }
+                        catch { }
+                    }
+                }
             }
-        }
-    }
-    catch { }
-    finally { checkingForUpdate = false; }
-}
-
-// --- Download, verify, and launch external updater process ---
-static async Task DownloadAndInstallUpdateAsync()
-{
-    if (string.IsNullOrEmpty(downloadUrl)) return;
-
-    downloading = true;
-    downloadProgress = 0f;
-
-    try
-    {
-        using var client = new HttpClient();
-        var tempZip = Path.Combine(Path.GetTempPath(), "VRCUFM_update.zip");
-
-        using var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
-        response.EnsureSuccessStatusCode();
-        long totalBytes = response.Content.Headers.ContentLength ?? 0;
-
-        using var contentStream = await response.Content.ReadAsStreamAsync();
-        using var fs = new FileStream(tempZip, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 8192, true);
-        byte[] buffer = new byte[8192];
-        long totalRead = 0;
-        int read;
-        while ((read = await contentStream.ReadAsync(buffer)) > 0)
-        {
-            await fs.WriteAsync(buffer.AsMemory(0, read));
-            totalRead += read;
-            if (totalBytes > 0) downloadProgress = (float)totalRead / totalBytes;
+            catch { }
+            finally { checkingForUpdate = false; }
         }
 
-        // Optional hash check
-        if (!string.IsNullOrEmpty(expectedHash))
+        static async Task DownloadAndInstallUpdateAsync()
         {
-            fs.Seek(0, SeekOrigin.Begin);
-            using var sha = SHA256.Create();
-            byte[] hash = await sha.ComputeHashAsync(fs);
-            string actual = BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
-            if (!string.Equals(actual, expectedHash, StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrEmpty(downloadUrl)) return;
+
+            downloading = true;
+            downloadProgress = 0f;
+
+            try
             {
+                using var client = new HttpClient();
+                var tempZip = Path.Combine(Path.GetTempPath(), "VRCUFM_update.zip");
+
+                using var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
+                response.EnsureSuccessStatusCode();
+                long totalBytes = response.Content.Headers.ContentLength ?? 0;
+
+                using var contentStream = await response.Content.ReadAsStreamAsync();
+                using var fs = new FileStream(tempZip, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 8192, true);
+                byte[] buffer = new byte[8192];
+                long totalRead = 0;
+                int read;
+                while ((read = await contentStream.ReadAsync(buffer)) > 0)
+                {
+                    await fs.WriteAsync(buffer.AsMemory(0, read));
+                    totalRead += read;
+                    if (totalBytes > 0) downloadProgress = (float)totalRead / totalBytes;
+                }
+        
+                if (!string.IsNullOrEmpty(expectedHash))
+                {
+                    fs.Seek(0, SeekOrigin.Begin);
+                    using var sha = SHA256.Create();
+                    byte[] hash = await sha.ComputeHashAsync(fs);
+                    string actual = BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+                    if (!string.Equals(actual, expectedHash, StringComparison.OrdinalIgnoreCase))
+                    {
+                        fs.Close();
+                        File.Delete(tempZip);
+                        MessageBox.Show($"Hash mismatch.\nExpected: {expectedHash}\nGot: {actual}",
+                            "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
+                    }
+                }
                 fs.Close();
+                string stagingDir = Path.Combine(Path.GetTempPath(), "VRCUFM_staging");
+                if (Directory.Exists(stagingDir)) Directory.Delete(stagingDir, true);
+                Directory.CreateDirectory(stagingDir);
+                ZipFile.ExtractToDirectory(tempZip, stagingDir);
                 File.Delete(tempZip);
-                MessageBox.Show($"Hash mismatch.\nExpected: {expectedHash}\nGot: {actual}",
-                    "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-        }
-        fs.Close();
+        
+                bool isWin = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+                string[] exeNames = isWin
+                    ? new[] { "VRChatUnfriendManager.exe", "Unfriendmaxxing.exe" }
+                    : new[] { "VRChatUnfriendManager", "Unfriendmaxxing" };
 
-        // Extract new files to a temporary staging folder
-        string stagingDir = Path.Combine(Path.GetTempPath(), "VRCUFM_staging");
-        if (Directory.Exists(stagingDir)) Directory.Delete(stagingDir, true);
-        Directory.CreateDirectory(stagingDir);
-        ZipFile.ExtractToDirectory(tempZip, stagingDir);
-        File.Delete(tempZip);
+                string? newExeInStaging = null;
+                foreach (var name in exeNames)
+                {
+                    newExeInStaging = Directory.GetFiles(stagingDir, name, SearchOption.AllDirectories).FirstOrDefault();
+                    if (newExeInStaging != null) break;
+                }
+                if (newExeInStaging == null && isWin)
+                    newExeInStaging = Directory.GetFiles(stagingDir, "*.exe", SearchOption.AllDirectories).FirstOrDefault();
 
-        // Find the new executable inside staging (search recursively)
-        bool isWin = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-        string[] exeNames = isWin
-            ? new[] { "VRChatUnfriendManager.exe", "Unfriendmaxxing.exe" }
-            : new[] { "VRChatUnfriendManager", "Unfriendmaxxing" };
+                if (newExeInStaging == null)
+                {
+                    MessageBox.Show("Could not find executable in the update archive.",
+                        "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+                string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                if (string.IsNullOrEmpty(currentExe))
+                {
+                    MessageBox.Show("Cannot determine current executable path.", "Update Failed",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
 
-        string? newExeInStaging = null;
-        foreach (var name in exeNames)
-        {
-            newExeInStaging = Directory.GetFiles(stagingDir, name, SearchOption.AllDirectories).FirstOrDefault();
-            if (newExeInStaging != null) break;
-        }
-        if (newExeInStaging == null && isWin)
-            newExeInStaging = Directory.GetFiles(stagingDir, "*.exe", SearchOption.AllDirectories).FirstOrDefault();
-
-        if (newExeInStaging == null)
-        {
-            MessageBox.Show("Could not find executable in the update archive.",
-                "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return;
-        }
-
-        // Current executable path
-        string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? "";
-        if (string.IsNullOrEmpty(currentExe))
-        {
-            MessageBox.Show("Cannot determine current executable path.", "Update Failed",
-                MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return;
-        }
-
-        string appDir = Path.GetDirectoryName(currentExe)!;
-        int currentPid = Environment.ProcessId;
-
-        // --- Build the external updater process ---
-        if (isWin)
-        {
-            // PowerShell script that:
-            //   1. Waits for the original process to exit
-            //   2. Copies all files from staging to the app directory (overwrites)
-            //   3. Deletes the staging folder and the script itself
-            //   4. Restarts the app
-            string psScriptPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update.ps1");
-            string psScript = $@"
+                string appDir = Path.GetDirectoryName(currentExe)!;
+                int currentPid = Environment.ProcessId;
+        
+                if (isWin)
+                {
+                    string psScriptPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update.ps1");
+                    string psScript = $@"
 param([int]$pidToWait, [string]$sourceDir, [string]$destDir, [string]$exeName)
 
 Wait-Process -Id $pidToWait -ErrorAction SilentlyContinue
@@ -2511,22 +2493,21 @@ Remove-Item -Force ""{psScriptPath}""
 
 Start-Process -FilePath ""$destDir\$exeName""
 ".Trim();
-            File.WriteAllText(psScriptPath, psScript);
+                    File.WriteAllText(psScriptPath, psScript);
 
-            string exeRelativeName = Path.GetFileName(newExeInStaging);
-            string args = $"-NoProfile -ExecutionPolicy Bypass -File \"{psScriptPath}\" -pidToWait {currentPid} -sourceDir \"{stagingDir}\" -destDir \"{appDir}\" -exeName \"{exeRelativeName}\"";
-            Process.Start(new ProcessStartInfo("powershell.exe", args)
-            {
-                WindowStyle = ProcessWindowStyle.Hidden,
-                CreateNoWindow = true,
-                UseShellExecute = false
-            });
-        }
-        else
-        {
-            // Bash script for Linux
-            string bashScriptPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update.sh");
-            string bashScript = $@"#!/bin/bash
+                    string exeRelativeName = Path.GetFileName(newExeInStaging);
+                    string args = $"-NoProfile -ExecutionPolicy Bypass -File \"{psScriptPath}\" -pidToWait {currentPid} -sourceDir \"{stagingDir}\" -destDir \"{appDir}\" -exeName \"{exeRelativeName}\"";
+                    Process.Start(new ProcessStartInfo("powershell.exe", args)
+                    {
+                        WindowStyle = ProcessWindowStyle.Hidden,
+                        CreateNoWindow = true,
+                        UseShellExecute = false
+                    });
+                }
+                else
+                {
+                    string bashScriptPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update.sh");
+                    string bashScript = $@"#!/bin/bash
 PID_TO_WAIT={currentPid}
 SOURCE_DIR=""{stagingDir.Replace("\"", "\\\"")}""
 DEST_DIR=""{appDir.Replace("\"", "\\\"")}""
@@ -2543,28 +2524,26 @@ rm -f ""$SCRIPT_PATH""
 
 cd ""$DEST_DIR"" && chmod +x ""$EXE_NAME"" && ./""$EXE_NAME"" &
 ".Trim();
-            File.WriteAllText(bashScriptPath, bashScript);
-            // Make executable
-            Process.Start("chmod", $"+x \"{bashScriptPath}\"").WaitForExit(500);
-            Process.Start(new ProcessStartInfo("/bin/bash", bashScriptPath)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true
-            });
-        }
+                    File.WriteAllText(bashScriptPath, bashScript);
 
-        // Exit the current process immediately – the updater script takes over
-        Environment.Exit(0);
-    }
-    catch (Exception ex)
-    {
-        MessageBox.Show($"Update failed:\n{ex.Message}", "Update Error",
-            MessageBoxButtons.OK, MessageBoxIcon.Error);
-        downloading = false;
-        downloadProgress = 0f;
-    }
-}
-        // ================================================================
+                    Process.Start("chmod", $"+x \"{bashScriptPath}\"").WaitForExit(500);
+                    Process.Start(new ProcessStartInfo("/bin/bash", bashScriptPath)
+                    {
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    });
+                }
+        
+                Environment.Exit(0);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Update failed:\n{ex.Message}", "Update Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                downloading = false;
+                downloadProgress = 0f;
+            }
+        }
 
         static DateTime? GetNextScheduledRun()
         {
