@@ -907,6 +907,8 @@ namespace Unfriendmaxxing
         static bool downloading = false;
 
         [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
+        [DllImport("kernel32.dll")] static extern bool FreeConsole();
+        [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]  private static unsafe void RaylibLogCallback(int logLevel, sbyte* text, sbyte* args) { }
         [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int cmd);
         [DllImport("user32.dll")] static extern IntPtr FindWindow(string? cls, string wnd);
         [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hWnd, int nIndex);
@@ -1248,12 +1250,21 @@ tray.run()
         public static async Task Main(string[] args)
         {
             bool isAutostart = args.Contains("--autostart");
-
+            
 #if !DEBUG
-            try { var h = GetConsoleWindow(); if (h != IntPtr.Zero) ShowWindow(h, SW_HIDE); } catch { }
-#endif
+            // 1. Kill all Raylib logs (even those before InitWindow)
+            unsafe
+            {
+                Raylib.SetTraceLogCallback(&RaylibLogCallback);
+            }
 
-            Console.WriteLine("VRChat Unfriend Manager Starting...");
+            // 2. Suppress any C# Console.WriteLine calls
+            Console.SetOut(TextWriter.Null);
+            Console.SetError(TextWriter.Null);
+            
+            FreeConsole();
+#endif
+            
             Paths.EnsureExists();
             LoadConfig();
 
@@ -1271,6 +1282,9 @@ tray.run()
             ConfigFlags flags = ConfigFlags.ResizableWindow | ConfigFlags.HighDpiWindow;
             Raylib.SetConfigFlags(flags);
             Raylib.InitWindow(1280, 800, "VRChat Unfriend Manager");
+            Raylib.SetTraceLogLevel(TraceLogLevel.None);       // ✅ silences all logs
+            Console.SetOut(TextWriter.Null);
+            Console.SetError(TextWriter.Null);
 
             EnableMinimizeToTray();
 
