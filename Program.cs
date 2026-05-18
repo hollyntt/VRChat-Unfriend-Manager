@@ -824,6 +824,41 @@ namespace Unfriendmaxxing
 
     class Program
     {
+        static string AppVersion
+        {
+            get
+            {
+                // Read Git hash from InformationalVersion (set at build time)
+                var assembly = Assembly.GetExecutingAssembly();
+                var informationalVersion = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
+                if (informationalVersion != null && !string.IsNullOrEmpty(informationalVersion.InformationalVersion))
+                {
+                    string version = informationalVersion.InformationalVersion;
+                    if (version.Length >= 7)
+                        return version[..7];
+                    return version;
+                }
+
+                // Fallback for development – try to get Git hash at runtime
+                try
+                {
+                    using var process = new Process();
+                    process.StartInfo.FileName = "git";
+                    process.StartInfo.Arguments = "rev-parse --short=7 HEAD";
+                    process.StartInfo.UseShellExecute = false;
+                    process.StartInfo.RedirectStandardOutput = true;
+                    process.StartInfo.CreateNoWindow = true;
+                    process.Start();
+                    string hash = process.StandardOutput.ReadToEnd().Trim();
+                    process.WaitForExit(1000);
+                    if (!string.IsNullOrEmpty(hash) && hash.Length >= 7)
+                        return hash;
+                }
+                catch { }
+
+                return "unknown";
+            }
+        }
         static VRChatApiService api = new();
         static List<SafeLimitedUserFriend> friends = new();
         static HashSet<string> favorites = new();
@@ -1226,10 +1261,9 @@ tray.run()
         {
             bool isAutostart = args.Contains("--autostart");
 
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                try { var h = GetConsoleWindow(); if (h != IntPtr.Zero) ShowWindow(h, SW_HIDE); } catch { }
-            }
+#if !DEBUG
+            try { var h = GetConsoleWindow(); if (h != IntPtr.Zero) ShowWindow(h, SW_HIDE); } catch { }
+#endif
 
             Console.WriteLine("VRChat Unfriend Manager Starting...");
             Paths.EnsureExists();
@@ -2342,7 +2376,15 @@ tray.run()
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
 
-                latestVersion = root.GetProperty("tag_name").GetString() ?? "";
+                string tag = root.GetProperty("tag_name").GetString() ?? "";
+                latestVersion = tag.TrimStart('v');
+
+                // Don't show update if same version
+                if (latestVersion == AppVersion)
+                {
+                    updateAvailable = false;
+                    return;
+                }
 
                 var assets = root.GetProperty("assets");
                 foreach (var asset in assets.EnumerateArray())
@@ -2350,45 +2392,36 @@ tray.run()
                     var name = asset.GetProperty("name").GetString() ?? "";
                     var url  = asset.GetProperty("browser_download_url").GetString() ?? "";
 
-                    // Main release archive (zip)
                     if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                     {
                         downloadUrl = url;
                         updateAvailable = true;
                     }
-                    // SHA‑256 checksum file (optional)
                     else if (name.EndsWith(".sha256", StringComparison.OrdinalIgnoreCase))
                     {
                         try
                         {
                             var hashResponse = await client.GetAsync(url);
                             var hashContent = await hashResponse.Content.ReadAsStringAsync();
-                            expectedHash = hashContent.Trim();   // just the hex digest
+                            expectedHash = hashContent.Trim();
                         }
                         catch
                         {
-                            expectedHash = "";   // if missing, skip verification
+                            expectedHash = "";
                         }
                     }
                 }
             }
-            catch
-            {
-                // Network or API error – treat as no update available
-            }
-            finally
-            {
-                checkingForUpdate = false;
-            }
+            catch { }
+            finally { checkingForUpdate = false; }
         }
         static async Task DownloadAndInstallUpdateAsync()
         {
-            if (string.IsNullOrEmpty(downloadUrl))
-                return;
-
+            if (string.IsNullOrEmpty(downloadUrl)) return;
+            
             downloading = true;
             downloadProgress = 0f;
-
+            
             try
             {
                 using var client = new HttpClient();
@@ -2401,7 +2434,7 @@ tray.run()
                 using var contentStream = await response.Content.ReadAsStreamAsync();
 
                 using var fileStream = new FileStream(tempZip, FileMode.Create, FileAccess.ReadWrite,
-                                                     FileShare.None, 8192, true);
+                    FileShare.None, 8192, true);
 
                 var buffer = new byte[8192];
                 long totalRead = 0;
@@ -2415,7 +2448,7 @@ tray.run()
                         downloadProgress = (float)totalRead / totalBytes;
                 }
 
-                // --- HASH VERIFICATION (if available) ---
+                // --- Hash verification (optional) ---
                 if (!string.IsNullOrEmpty(expectedHash))
                 {
                     fileStream.Seek(0, SeekOrigin.Begin);
@@ -2437,64 +2470,87 @@ tray.run()
                     }
                 }
 
-                fileStream.Close();   // release the file for extraction
+                fileStream.Close();
 
-                // --- EXTRACT ZIP TO TEMP DIRECTORY ---
+                // --- Extract to temp folder ---
                 string extractDir = Path.Combine(Path.GetTempPath(), "VRCUFM_new");
-                if (Directory.Exists(extractDir))
-                    Directory.Delete(extractDir, true);
+                if (Directory.Exists(extractDir)) Directory.Delete(extractDir, true);
                 Directory.CreateDirectory(extractDir);
-
                 ZipFile.ExtractToDirectory(tempZip, extractDir);
-                File.Delete(tempZip);   // clean up the downloaded zip
+                File.Delete(tempZip);
 
-                // --- REPLACE CURRENT APPLICATION ---
+                // --- Find the correct executable inside the archive ---
+                bool isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+                string targetFolder = isWindows ? "win-x64" : "linux-x64";
+                string[] possibleExeNames = isWindows
+                    ? new[] { "VRChatUnfriendManager.exe", "Unfriendmaxxing.exe" }
+                    : new[] { "VRChatUnfriendManager", "Unfriendmaxxing" };
+
+                string? newExePath = null;
+                var targetDir = Path.Combine(extractDir, targetFolder);
+                if (Directory.Exists(targetDir))
+                {
+                    foreach (var name in possibleExeNames)
+                    {
+                        string candidate = Path.Combine(targetDir, name);
+                        if (File.Exists(candidate))
+                        {
+                            newExePath = candidate;
+                            break;
+                        }
+                    }
+                    // Fallback: first .exe in the folder
+                    if (newExePath == null && isWindows)
+                    {
+                        newExePath = Directory.GetFiles(targetDir, "*.exe").FirstOrDefault();
+                    }
+                }
+
+                if (newExePath == null)
+                {
+                    MessageBox.Show("Could not find executable in the update archive.",
+                        "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                // --- Replace current installation ---
                 string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? "";
                 if (string.IsNullOrEmpty(currentExe))
                 {
                     MessageBox.Show("Cannot determine current executable path.", "Update Failed",
-                                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
 
                 string appDir = Path.GetDirectoryName(currentExe) ?? "";
-                string newExePath = Path.Combine(extractDir, Path.GetFileName(currentExe));
 
-                if (!File.Exists(newExePath))
-                {
-                    MessageBox.Show("The update archive does not contain the main executable.",
-                                    "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
-                // 1. Rename current exe to backup (.old)
+                // 1. Backup old exe
                 string backupExe = currentExe + ".old";
-                if (File.Exists(backupExe))
-                    File.Delete(backupExe);
+                if (File.Exists(backupExe)) File.Delete(backupExe);
                 File.Move(currentExe, backupExe);
 
-                // 2. Copy all new files over the top (overwriting old ones)
-                foreach (string newFilePath in Directory.GetFiles(extractDir, "*", SearchOption.AllDirectories))
+                // 2. Copy all new files (overwrites)
+                foreach (string newFile in Directory.GetFiles(extractDir, "*", SearchOption.AllDirectories))
                 {
-                    string relativePath = Path.GetRelativePath(extractDir, newFilePath);
-                    string destPath = Path.Combine(appDir, relativePath);
-
-                    Directory.CreateDirectory(Path.GetDirectoryName(destPath)!);
-                    File.Copy(newFilePath, destPath, true);
+                    string relative = Path.GetRelativePath(extractDir, newFile);
+                    string destFile = Path.Combine(appDir, relative);
+                    Directory.CreateDirectory(Path.GetDirectoryName(destFile)!);
+                    File.Copy(newFile, destFile, true);
                 }
 
-                // 3. Clean up the temp extraction folder
+                // 3. Clean up temp
                 Directory.Delete(extractDir, true);
 
-                // 4. Launch the new version and exit
-                Process.Start(newExePath);
-                Application.Exit();        // in case we're on the GUI thread
+                // 4. Launch new version and exit
+                string finalExe = Path.Combine(appDir, Path.GetFileName(newExePath));
+                Process.Start(finalExe);
+                Application.Exit();
                 Environment.Exit(0);
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Update failed:\n{ex.Message}", "Update Error",
-                                MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
             finally
             {
