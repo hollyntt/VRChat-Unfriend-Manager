@@ -55,7 +55,7 @@ jobs:
             
             **Asset:**
             - `VRCUFM.exe` — Single-file Windows executable
-          prerelease: true
+          prerelease: false
           allowUpdates: true
           makeLatest: true
         env:

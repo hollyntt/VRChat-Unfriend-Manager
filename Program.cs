@@ -71,7 +71,7 @@ namespace Unfriendmaxxing
         public bool RunOnStartup { get; set; } = false;
         public bool VrcxStartupDesktop { get; set; } = false;
         public bool VrcxStartupVr { get; set; } = false;
-        public bool HideInTaskbar { get; set; } = true;
+        public bool HideInTaskbar { get; set; } = true;   // Tray toggle
         public List<string> ExcludedFavGroups { get; set; } = new();
 
         public bool AutoDeclineFriendRequests { get; set; } = false;
@@ -89,6 +89,7 @@ namespace Unfriendmaxxing
         private TaskCompletionSource<string?>? tfaTcs;
         private string tfaCode = "";
         private bool show2FADialog = false;
+
         private HttpClient? _authClient;
 
         public VRChatApiService()
@@ -196,7 +197,11 @@ namespace Unfriendmaxxing
                     TextureCache.SetCookie(vrcxCookie);
                     RebuildAuthClient(vrcxCookie);
                     var name = await GetCurrentDisplayNameAsync();
-                    if (!string.IsNullOrWhiteSpace(name)) return (true, name);
+                    if (!string.IsNullOrWhiteSpace(name))
+                    {
+                        Console.WriteLine("[AUTH] Logged in via VRCX cookie");
+                        return (true, name);
+                    }
                 }
             }
 
@@ -523,13 +528,23 @@ namespace Unfriendmaxxing
                     resp = await http.GetAsync(url);
                     body = await resp.Content.ReadAsStringAsync();
                 }
-                catch { break; }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[FriendRequests] HTTP error at offset {offset}: {ex.Message}");
+                    break;
+                }
 
-                if (!resp.IsSuccessStatusCode) break;
+                if (!resp.IsSuccessStatusCode)
+                {
+                    Console.WriteLine($"[FriendRequests] Non-success {resp.StatusCode} at offset {offset}: {body}");
+                    break;
+                }
 
+                List<Notification>? page = null;
                 try
                 {
                     using var doc = JsonDocument.Parse(body);
+                    page = new List<Notification>();
                     foreach (var el in doc.RootElement.EnumerateArray())
                     {
                         var n = new Notification(
@@ -538,24 +553,41 @@ namespace Unfriendmaxxing
                             senderUsername: el.TryGetProperty("senderUsername", out var sunP) ? sunP.GetString() : null,
                             type: NotificationType.FriendRequest,
                             message: el.TryGetProperty("message", out var msgP) ? msgP.GetString() ?? "" : "",
-                            details: "",
+                            details: new Dictionary<string, string>().ToString(),
                             seen: false,
                             createdAt: el.TryGetProperty("createdAt", out var caP) && DateTime.TryParse(caP.GetString(), out var dt) ? dt : DateTime.UtcNow
                         );
 
                         if (!string.IsNullOrEmpty(n.SenderUserId) && n.SenderUserId != CurrentUserId)
-                            result.Add(n);
+                            page.Add(n);
                     }
                 }
-                catch { break; }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[FriendRequests] Parse error at offset {offset}: {ex.Message}");
+                    break;
+                }
+
+                result.AddRange(page);
+                if (page.Count < 100) break;
             }
+
+            Console.WriteLine($"[FriendRequests] Found {result.Count} incoming request(s)");
             return result;
         }
 
         public async Task DeclineFriendRequestAsync(string notificationId)
         {
             var http = GetAuthClient();
-            await http.PutAsync($"https://api.vrchat.cloud/api/1/auth/user/notifications/{notificationId}/hide", new StringContent("{}", Encoding.UTF8, "application/json"));
+            var url = $"https://api.vrchat.cloud/api/1/auth/user/notifications/{notificationId}/hide";
+            var resp = await http.PutAsync(url, new StringContent("{}", Encoding.UTF8, "application/json"));
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                var delResp = await http.DeleteAsync($"https://api.vrchat.cloud/api/1/auth/user/notifications/{notificationId}");
+                if (!delResp.IsSuccessStatusCode)
+                    Console.WriteLine($"[FriendRequests] Decline failed for {notificationId}: {delResp.StatusCode}");
+            }
         }
 
         public async Task SendFriendRequestAsync(string userId)
@@ -779,7 +811,10 @@ namespace Unfriendmaxxing
                     }
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[VRCX] DB read failed: {ex.Message}");
+            }
 
             return result;
         }
@@ -842,11 +877,13 @@ namespace Unfriendmaxxing
         static float downloadProgress = 0f;
         static bool downloading = false;
 
+        // ==================== MINIMIZE TO TRAY HOOK ====================
         [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
         [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int cmd);
         [DllImport("user32.dll")] static extern IntPtr FindWindow(string? cls, string wnd);
         [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hWnd, int nIndex);
         [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
+
         [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")] static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
         [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")] static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
         [DllImport("user32.dll")] static extern IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
@@ -859,6 +896,7 @@ namespace Unfriendmaxxing
         static IntPtr originalWndProc = IntPtr.Zero;
         static GCHandle? wndProcHandle;
         static readonly WndProc wndProcDelegate = WndProcHook;
+
         delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
         static void EnableMinimizeToTray()
@@ -872,8 +910,13 @@ namespace Unfriendmaxxing
                 originalWndProc = GetWindowLongPtr(hwnd, GWL_WNDPROC);
                 wndProcHandle = GCHandle.Alloc(wndProcDelegate);
                 SetWindowLongPtr(hwnd, GWL_WNDPROC, Marshal.GetFunctionPointerForDelegate(wndProcDelegate));
+
+                Console.WriteLine("[Hook] Minimize button hooked successfully");
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Hook] Failed: {ex.Message}");
+            }
         }
 
         static IntPtr WndProcHook(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
@@ -885,6 +928,7 @@ namespace Unfriendmaxxing
             }
             return CallWindowProc(originalWndProc, hWnd, msg, wParam, lParam);
         }
+        // ============================================================
 
         static bool windowVisible = true;
         static bool _showRequested = false;
@@ -892,6 +936,10 @@ namespace Unfriendmaxxing
         static Thread? trayThread;
         static NotifyIcon? _notifyIcon;
         static readonly object _trayLock = new();
+        static Process? _linuxTrayProcess;
+        static System.Net.Sockets.Socket? _linuxTraySocket;
+        static Thread? _linuxTrayListenerThread;
+        static string _linuxSocketPath = Path.Combine(Path.GetTempPath(), $"vum_tray_{Environment.ProcessId}.sock");
 
         static void ShowMainWindow()
         {
@@ -931,14 +979,20 @@ namespace Unfriendmaxxing
             lock (_trayLock)
             {
                 if (_trayRunning) return;
+                trayThread?.Join(3000);
+                trayThread = null;
                 _trayRunning = true;
                 trayThread = new Thread(() =>
                 {
-                    RunWindowsTray(autostart);
+                    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                        RunWindowsTray(autostart);
+                    else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                        RunLinuxTray(autostart);
                     _trayRunning = false;
                 });
                 trayThread.IsBackground = true;
-                trayThread.SetApartmentState(ApartmentState.STA);
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                    trayThread.SetApartmentState(ApartmentState.STA);
                 trayThread.Start();
             }
         }
@@ -948,40 +1002,221 @@ namespace Unfriendmaxxing
             lock (_trayLock)
             {
                 _trayRunning = false;
+
                 if (_notifyIcon != null)
                 {
-                    _notifyIcon.Visible = false;
-                    _notifyIcon.Dispose();
-                    _notifyIcon = null;
+                    try
+                    {
+                        _notifyIcon.Visible = false;
+                        _notifyIcon.Dispose();
+                        _notifyIcon = null;
+                    }
+                    catch { }
                 }
+
+                try { _linuxTrayProcess?.Kill(); } catch { }
+                _linuxTrayProcess = null;
+
+                try { _linuxTraySocket?.Close(); } catch { }
+                _linuxTraySocket = null;
+
+                trayThread?.Join(3000);
+                trayThread = null;
             }
         }
 
         static Icon LoadTrayIcon()
         {
+            string exeDir = AppDomain.CurrentDomain.BaseDirectory;
+
+            var possibleIcons = new[]
+            {
+                Path.Combine(exeDir, "icon.ico"),
+                Path.Combine(exeDir, "icon.png"),
+                Path.Combine(Directory.GetCurrentDirectory(), "icon.ico"),
+                Path.Combine(Directory.GetCurrentDirectory(), "icon.png")
+            };
+
+            foreach (var path in possibleIcons)
+            {
+                if (File.Exists(path))
+                {
+                    try
+                    {
+                        if (path.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
+                            return new Icon(path);
+
+                        // Convert png to icon
+                        using var bmp = new Bitmap(path);
+                        return Icon.FromHandle(bmp.GetHicon());
+                    }
+                    catch { }
+                }
+            }
+
             return SystemIcons.Application;
         }
 
         static void RunWindowsTray(bool autostart)
         {
             if (autostart) HideMainWindow();
-            ApplicationConfiguration.Initialize();
 
-            _notifyIcon = new NotifyIcon
+            try
             {
-                Icon = LoadTrayIcon(),
-                Text = "VRChat Unfriend Manager",
-                Visible = true
+                ApplicationConfiguration.Initialize();
+
+                var icon = LoadTrayIcon();
+
+                _notifyIcon = new NotifyIcon
+                {
+                    Icon = icon,
+                    Text = "VRChat Unfriend Manager",
+                    Visible = true,
+                };
+
+                var menu = new ContextMenuStrip();
+                menu.Items.Add("Show", null, (_, _) => ShowMainWindow());
+                menu.Items.Add(new ToolStripSeparator());
+                menu.Items.Add("Exit", null, (_, _) => { shouldExit = true; Application.ExitThread(); });
+
+                _notifyIcon.ContextMenuStrip = menu;
+                _notifyIcon.DoubleClick += (_, _) => ShowMainWindow();
+
+                Console.WriteLine("[TRAY] NotifyIcon created successfully");
+
+                Application.Run();
+
+                _notifyIcon.Visible = false;
+                _notifyIcon.Dispose();
+                _notifyIcon = null;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[TRAY] RunWindowsTray failed: {ex.Message}");
+            }
+        }
+
+        static void RunLinuxTray(bool autostart)
+        {
+            if (autostart) HideMainWindow();
+
+            string scriptPath = Path.Combine(Path.GetTempPath(), $"vum_tray_{Environment.ProcessId}.py");
+
+            string iconPath = "icon.png";
+            if (!File.Exists(iconPath)) iconPath = "icon.ico";
+            string absIconPath = File.Exists(iconPath) ? Path.GetFullPath(iconPath) : "";
+
+            string pySocketPath = _linuxSocketPath.Replace("\\", "\\\\");
+            string pyIconPath = absIconPath.Replace("\\", "\\\\");
+
+            string script = $@"
+import sys, socket, os, threading
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+except ImportError:
+    sys.exit(42)
+
+SOCK = ""{pySocketPath}""
+ICON = ""{pyIconPath}""
+
+def load_icon():
+    if ICON and os.path.exists(ICON):
+        try:
+            return Image.open(ICON).resize((64, 64)).convert('RGBA')
+        except:
+            pass
+    img = Image.new('RGBA', (64, 64), (80, 40, 140, 255))
+    d = ImageDraw.Draw(img)
+    d.ellipse([8, 8, 56, 56], fill=(160, 100, 220, 255))
+    return img
+
+def send_cmd(cmd):
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.connect(SOCK)
+        s.sendall(cmd.encode())
+        s.close()
+    except:
+        pass
+
+def on_show(icon, item): send_cmd('show')
+def on_exit(icon, item):
+    send_cmd('exit')
+    icon.stop()
+
+menu = pystray.Menu(
+    pystray.MenuItem('Show', on_show, default=True),
+    pystray.MenuItem('Exit', on_exit),
+)
+tray = pystray.Icon('VRChat Unfriend Manager', load_icon(), 'VRChat Unfriend Manager', menu)
+tray.run()
+";
+            File.WriteAllText(scriptPath, script);
+
+            if (File.Exists(_linuxSocketPath)) File.Delete(_linuxSocketPath);
+            var unixEp = new System.Net.Sockets.UnixDomainSocketEndPoint(_linuxSocketPath);
+            _linuxTraySocket = new System.Net.Sockets.Socket(
+                System.Net.Sockets.AddressFamily.Unix,
+                System.Net.Sockets.SocketType.Stream,
+                System.Net.Sockets.ProtocolType.Unspecified);
+            _linuxTraySocket.Bind(unixEp);
+            _linuxTraySocket.Listen(4);
+
+            _linuxTrayListenerThread = new Thread(() =>
+            {
+                while (_trayRunning)
+                {
+                    System.Net.Sockets.Socket? client = null;
+                    try { client = _linuxTraySocket.Accept(); }
+                    catch { break; }
+
+                    try
+                    {
+                        var buf = new byte[64];
+                        int n = client.Receive(buf);
+                        var cmd = Encoding.UTF8.GetString(buf, 0, n).Trim();
+                        if (cmd == "show") ShowMainWindow();
+                        else if (cmd == "exit") shouldExit = true;
+                    }
+                    catch { }
+                    finally { try { client?.Close(); } catch { } }
+                }
+            }) { IsBackground = true };
+            _linuxTrayListenerThread.Start();
+
+            var psi = new ProcessStartInfo
+            {
+                FileName = "python3",
+                Arguments = $"\"{scriptPath}\"",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
             };
 
-            var menu = new ContextMenuStrip();
-            menu.Items.Add("Show", null, (_, _) => ShowMainWindow());
-            menu.Items.Add("Exit", null, (_, _) => { shouldExit = true; Application.ExitThread(); });
+            try
+            {
+                _linuxTrayProcess = Process.Start(psi);
+                _linuxTrayProcess?.WaitForExit();
 
-            _notifyIcon.ContextMenuStrip = menu;
-            _notifyIcon.DoubleClick += (_, _) => ShowMainWindow();
-
-            Application.Run();
+                int exitCode = _linuxTrayProcess?.ExitCode ?? -1;
+                if (exitCode == 42)
+                {
+                    Console.WriteLine("[TRAY] pystray / Pillow not found — tray icon unavailable.");
+                    Console.WriteLine("[TRAY] Install with:  pip install pystray pillow");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[TRAY] Failed to launch tray helper: {ex.Message}");
+            }
+            finally
+            {
+                _trayRunning = false;
+                try { File.Delete(scriptPath); } catch { }
+                try { File.Delete(_linuxSocketPath); } catch { }
+                try { _linuxTraySocket?.Close(); } catch { }
+            }
         }
 
         public static async Task Main(string[] args)
@@ -997,11 +1232,37 @@ namespace Unfriendmaxxing
             Paths.EnsureExists();
             LoadConfig();
 
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                InstallLinuxDesktopEntry();
+
+            if (Directory.Exists(Paths.VrcxStartup))
+            {
+                UpdateVrcxShortcut("desktop", config.VrcxStartupDesktop);
+                UpdateVrcxShortcut("vr", config.VrcxStartupVr);
+            }
+
+            if (config.RunOnStartup) UpdateStartup(true);
+
             ConfigFlags flags = ConfigFlags.ResizableWindow | ConfigFlags.HighDpiWindow;
             Raylib.SetConfigFlags(flags);
             Raylib.InitWindow(1280, 800, "VRChat Unfriend Manager");
 
             EnableMinimizeToTray();
+
+            try
+            {
+                string iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "icon.png");
+                if (!File.Exists(iconPath))
+                    iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "icon.ico");
+
+                if (File.Exists(iconPath))
+                {
+                    var img = Raylib.LoadImage(iconPath);
+                    Raylib.SetWindowIcon(img);
+                    Raylib.UnloadImage(img);
+                }
+            }
+            catch { }
 
             Raylib.SetTargetFPS(60);
 
@@ -1043,6 +1304,12 @@ namespace Unfriendmaxxing
                     if (config.AutoUnfriendEnabled) StartAutoScheduler();
                     if (config.AutoDeclineFriendRequests) StartAutoDeclineChecker();
                 }
+                else
+                {
+                    status = string.IsNullOrEmpty(config.Username)
+                        ? "Please log in"
+                        : "Session expired — please log in again";
+                }
             });
 
             while (!shouldExit)
@@ -1051,6 +1318,9 @@ namespace Unfriendmaxxing
                 {
                     _showRequested = false;
                     Raylib.ClearWindowState(ConfigFlags.HiddenWindow);
+                    Raylib.SetWindowState(ConfigFlags.TopmostWindow);
+                    Raylib.ClearWindowState(ConfigFlags.TopmostWindow);
+                    if (config.HideInTaskbar) ApplyTaskbarVisibility(true);
                 }
 
                 if (!windowVisible)
@@ -1080,7 +1350,9 @@ namespace Unfriendmaxxing
 
                 ImGui.SetNextWindowPos(Vector2.Zero);
                 ImGui.SetNextWindowSize(new Vector2(screenW, screenH));
-                ImGui.Begin("##main", ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize);
+                ImGui.Begin("##main", ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoTitleBar |
+                    ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoScrollbar |
+                    ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoBringToFrontOnFocus);
 
                 if (sessionRestored || isLoggedIn) DrawMainUI();
                 else DrawLoginScreen();
@@ -1093,6 +1365,7 @@ namespace Unfriendmaxxing
             }
 
             wndProcHandle?.Free();
+
             autoCts?.Cancel();
             autoDeclineCts?.Cancel();
             unfriendCts?.Cancel();
@@ -1164,20 +1437,65 @@ namespace Unfriendmaxxing
             ImGui.BeginChild("##login_card", new Vector2(formW, formH), ImGuiChildFlags.Borders);
 
             ImGui.Spacing();
-            ImGui.TextColored(new Vector4(0.75f, 0.55f, 1f, 1f), "VRChat Unfriend Manager");
+            var title = "VRChat Unfriend Manager";
+            ImGui.SetCursorPosX((formW - ImGui.CalcTextSize(title).X) * 0.5f);
+            ImGui.TextColored(new Vector4(0.75f, 0.55f, 1f, 1f), title);
             ImGui.Spacing();
             ImGui.Separator();
             ImGui.Spacing();
 
-            ImGui.Text(status);
+            bool isSigningIn = status == "Signing in...";
+            bool isErr = !isSigningIn && (status.Contains("fail", StringComparison.OrdinalIgnoreCase) ||
+                                          status.Contains("wrong", StringComparison.OrdinalIgnoreCase) ||
+                                          status.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                                          status.Contains("expired", StringComparison.OrdinalIgnoreCase) ||
+                                          status.Contains("cookie", StringComparison.OrdinalIgnoreCase));
+
+            var statusColor = isSigningIn ? new Vector4(0.7f, 0.7f, 0.3f, 1f)
+                            : isErr ? new Vector4(1f, 0.3f, 0.3f, 1f)
+                            : new Vector4(0.5f, 0.5f, 0.6f, 1f);
+
+            ImGui.SetCursorPosX(pad);
+            if (isSigningIn)
+            {
+                int dots = (int)(ImGui.GetTime() * 2) % 4;
+                ImGui.TextColored(statusColor, "Signing in" + new string('.', dots));
+            }
+            else ImGui.TextColored(statusColor, status);
 
             ImGui.Spacing();
-            ImGui.InputText("Username", ref user, 100);
-            ImGui.InputText("Password", ref pass, 100, ImGuiInputTextFlags.Password);
-            ImGui.Checkbox("Remember me", ref remember);
 
-            if (ImGui.Button("Login"))
+            if (string.IsNullOrEmpty(user) && !string.IsNullOrEmpty(config.Username))
+                user = config.Username;
+
+            ImGui.SetCursorPosX(pad);
+            ImGui.TextDisabled("Username");
+            ImGui.SetCursorPosX(pad);
+            ImGui.SetNextItemWidth(fieldW);
+            ImGui.InputText("##user", ref user, 100);
+
+            ImGui.Spacing();
+
+            ImGui.SetCursorPosX(pad);
+            ImGui.TextDisabled("Password");
+            ImGui.SetCursorPosX(pad);
+            ImGui.SetNextItemWidth(fieldW);
+            ImGui.InputText("##pass", ref pass, 100, ImGuiInputTextFlags.Password);
+
+            ImGui.Spacing();
+
+            ImGui.SetCursorPosX(pad);
+            ImGui.Checkbox("Remember me", ref remember);
+            ImGui.Spacing();
+
+            bool canLogin = !working && !isSigningIn && !string.IsNullOrWhiteSpace(user) && !string.IsNullOrWhiteSpace(pass);
+
+            ImGui.SetCursorPosX(pad);
+            if (!canLogin) ImGui.BeginDisabled();
+            if (ImGui.Button(working || isSigningIn ? "Signing in..." : "Login", new Vector2(fieldW, 34)))
             {
+                working = true;
+                status = "Logging in...";
                 _ = Task.Run(async () =>
                 {
                     var (success, name, error) = await api.LoginWithCredentialsAsync(user, pass);
@@ -1186,18 +1504,31 @@ namespace Unfriendmaxxing
                         loggedInAs = name;
                         isLoggedIn = true;
                         sessionRestored = true;
-                        status = $"Logged in as {name}";
+                        if (remember)
+                        {
+                            config.Username = user;
+                            config.EncodedPassword = Convert.ToBase64String(Encoding.UTF8.GetBytes(pass));
+                            config.RememberMe = true;
+                            SaveConfig();
+                        }
                         await Refresh();
+                        if (config.AutoDeclineFriendRequests) StartAutoDeclineChecker();
+                        status = $"Logged in as {name}";
                     }
                     else status = error ?? "Login failed";
+                    working = false;
                 });
             }
+            if (!canLogin) ImGui.EndDisabled();
 
             ImGui.EndChild();
         }
 
         static void DrawMainUI()
         {
+            int sw = Raylib.GetScreenWidth();
+            int sh = Raylib.GetScreenHeight();
+
             ImGui.TextColored(new Vector4(0.75f, 0.55f, 1f, 1f), "VRChat Unfriend Manager");
             if (isLoggedIn)
             {
@@ -1205,7 +1536,7 @@ namespace Unfriendmaxxing
                 ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), $"  •  {loggedInAs}");
                 ImGui.SameLine();
                 float logoutW = ImGui.CalcTextSize("Logout").X + 16;
-                ImGui.SetCursorPosX(Raylib.GetScreenWidth() - logoutW - ImGui.GetStyle().WindowPadding.X);
+                ImGui.SetCursorPosX(sw - logoutW - ImGui.GetStyle().WindowPadding.X);
                 if (ImGui.Button("Logout"))
                 {
                     File.Delete(Paths.CookieFile);
@@ -1226,17 +1557,17 @@ namespace Unfriendmaxxing
             {
                 if (ImGui.BeginTabItem("Friends"))
                 {
-                    DrawFriendsTab(Raylib.GetScreenWidth(), Raylib.GetScreenHeight());
+                    DrawFriendsTab(sw, sh);
                     ImGui.EndTabItem();
                 }
                 if (ImGui.BeginTabItem("Groups"))
                 {
-                    DrawGroupsTab(Raylib.GetScreenWidth(), Raylib.GetScreenHeight());
+                    DrawGroupsTab(sw, sh);
                     ImGui.EndTabItem();
                 }
                 if (ImGui.BeginTabItem("Friend Requests"))
                 {
-                    DrawFriendRequestsTab(Raylib.GetScreenWidth(), Raylib.GetScreenHeight());
+                    DrawFriendRequestsTab(sw, sh);
                     ImGui.EndTabItem();
                 }
                 if (ImGui.BeginTabItem("Settings"))
@@ -1350,6 +1681,8 @@ namespace Unfriendmaxxing
 
             ImGui.Separator();
             ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.7f, 1f), status);
+            if (working && !isUnfriending)
+                ImGui.ProgressBar(-1f * (float)(ImGui.GetTime() % 1.0), new Vector2(-1, 6), "");
 
             var excludedIds = new HashSet<string>();
             foreach (var tag in config.ExcludedFavGroups)
@@ -1597,12 +1930,12 @@ namespace Unfriendmaxxing
             if (autoDecline)
             {
                 ImGui.Indent();
-                if (ImGui.Checkbox("Only decline requests from strangers", ref onlyStrangers))
+                if (ImGui.Checkbox("Only decline requests from strangers (not current friends or people you've played with)", ref onlyStrangers))
                 {
                     config.AutoDeclineOnlyFromStrangers = onlyStrangers;
                     SaveConfig();
                 }
-                if (ImGui.Checkbox("Automatically send friend request back", ref autoSendBack))
+                if (ImGui.Checkbox("Automatically send friend request back after decline", ref autoSendBack))
                 {
                     config.AutoSendRequestBack = autoSendBack;
                     SaveConfig();
@@ -1651,8 +1984,12 @@ namespace Unfriendmaxxing
                                 {
                                     await api.DeclineFriendRequestAsync(req.Id);
                                     await RefreshFriendRequests();
+                                    ShowToast("Declined", $"Declined request from {senderName}");
                                 }
-                                catch { }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"[FriendRequests] Manual decline failed: {ex.Message}");
+                                }
                             });
                         }
                         ImGui.SameLine();
@@ -1665,8 +2002,12 @@ namespace Unfriendmaxxing
                                     await api.SendFriendRequestAsync(req.SenderUserId ?? "");
                                     await api.DeclineFriendRequestAsync(req.Id);
                                     await RefreshFriendRequests();
+                                    ShowToast("Request Sent", $"Sent friend request to {senderName}");
                                 }
-                                catch { }
+                                catch (Exception ex)
+                                {
+                                    Console.WriteLine($"[FriendRequests] Send-back failed: {ex.Message}");
+                                }
                             });
                         }
                         ImGui.PopID();
@@ -1710,7 +2051,11 @@ namespace Unfriendmaxxing
 
                 int secsLeft = Math.Max(0, (int)Math.Ceiling((autoConfirmDeadline - DateTime.Now).TotalSeconds));
                 float fraction = 1f - (secsLeft / 15f);
-                var barCol = secsLeft > 8 ? new Vector4(0.3f, 0.8f, 0.3f, 1f) : secsLeft > 4 ? new Vector4(0.9f, 0.7f, 0.1f, 1f) : new Vector4(1f, 0.3f, 0.2f, 1f);
+                var barCol = secsLeft > 8
+                    ? new Vector4(0.3f, 0.8f, 0.3f, 1f)
+                    : secsLeft > 4
+                        ? new Vector4(0.9f, 0.7f, 0.1f, 1f)
+                        : new Vector4(1f, 0.3f, 0.2f, 1f);
 
                 ImGui.TextColored(barCol, $"Starting automatically in {secsLeft}s...");
                 ImGui.PushStyleColor(ImGuiCol.PlotHistogram, barCol);
@@ -1793,6 +2138,38 @@ namespace Unfriendmaxxing
                 }
             }
 
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                ImGui.SameLine();
+                ImGui.TextDisabled("(needs: pip install pystray pillow)");
+            }
+
+            if (Directory.Exists(Paths.VrcxStartup))
+            {
+                ImGui.Spacing();
+                ImGui.Text("VRCX Integration");
+                if (VrcxDataService.IsAvailable)
+                    ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "✓ VRCX database found — time together data enabled");
+                else
+                    ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCX.sqlite3 not found — time together will show as '-'");
+
+                bool vrcxDesktop = config.VrcxStartupDesktop;
+                if (ImGui.Checkbox("Launch with VRCX (Desktop)", ref vrcxDesktop))
+                {
+                    config.VrcxStartupDesktop = vrcxDesktop;
+                    UpdateVrcxShortcut("desktop", vrcxDesktop);
+                    SaveConfig();
+                }
+
+                bool vrcxVr = config.VrcxStartupVr;
+                if (ImGui.Checkbox("Launch with VRCX (VR)", ref vrcxVr))
+                {
+                    config.VrcxStartupVr = vrcxVr;
+                    UpdateVrcxShortcut("vr", vrcxVr);
+                    SaveConfig();
+                }
+            }
+
             ImGui.Spacing();
             ImGui.Separator();
             ImGui.Text("Updates");
@@ -1825,8 +2202,124 @@ namespace Unfriendmaxxing
                 if (autoEnabled) StartAutoScheduler();
                 else { autoCts?.Cancel(); autoCts = null; }
             }
+
+            if (config.AutoUnfriendEnabled)
+            {
+                ImGui.Spacing();
+
+                ImGui.Text("Repeat:");
+                ImGui.SameLine();
+                string[] schedTypes = { "Daily", "Weekly", "Monthly", "Once (specific date)" };
+                int schedType = config.AutoUnfriendScheduleType;
+                ImGui.SetNextItemWidth(200);
+                if (ImGui.Combo("##schedtype", ref schedType, schedTypes, schedTypes.Length))
+                {
+                    config.AutoUnfriendScheduleType = schedType;
+                    SaveConfig(); StartAutoScheduler();
+                }
+
+                if (config.AutoUnfriendScheduleType == 1)
+                {
+                    ImGui.Text("Day of week:");
+                    ImGui.SameLine();
+                    string[] weekdays = { "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday" };
+                    int weekday = Math.Clamp(config.AutoUnfriendMonthDay, 0, 6);
+                    ImGui.SetNextItemWidth(160);
+                    if (ImGui.Combo("##weekday", ref weekday, weekdays, weekdays.Length))
+                    {
+                        config.AutoUnfriendMonthDay = weekday;
+                        SaveConfig();
+                        StartAutoScheduler();
+                    }
+                }
+                else if (config.AutoUnfriendScheduleType == 2)
+                {
+                    ImGui.Text("Day of month:");
+                    ImGui.SameLine();
+                    int md = config.AutoUnfriendMonthDay;
+                    ImGui.SetNextItemWidth(60);
+                    if (ImGui.DragInt("##mday", ref md, 0.1f, 1, 28, "%d"))
+                    {
+                        config.AutoUnfriendMonthDay = Math.Clamp(md, 1, 28);
+                        SaveConfig(); StartAutoScheduler();
+                    }
+                }
+                else if (config.AutoUnfriendScheduleType == 3)
+                {
+                    ImGui.Text("Date:");
+                    ImGui.SameLine();
+                    int dy = config.AutoUnfriendYear;
+                    int dm = config.AutoUnfriendMonth;
+                    int dd = config.AutoUnfriendDay;
+                    ImGui.SetNextItemWidth(40);
+                    if (ImGui.DragInt("##dd", ref dd, 0.1f, 1, 31, "%02d"))
+                    { config.AutoUnfriendDay = Math.Clamp(dd, 1, 31); SaveConfig(); StartAutoScheduler(); }
+                    ImGui.SameLine(); ImGui.Text("/");
+                    ImGui.SameLine();
+                    ImGui.SetNextItemWidth(40);
+                    if (ImGui.DragInt("##dm", ref dm, 0.1f, 1, 12, "%02d"))
+                    { config.AutoUnfriendMonth = Math.Clamp(dm, 1, 12); SaveConfig(); StartAutoScheduler(); }
+                    ImGui.SameLine(); ImGui.Text("/");
+                    ImGui.SameLine();
+                    ImGui.SetNextItemWidth(70);
+                    if (ImGui.DragInt("##dy", ref dy, 0.2f, DateTime.Now.Year, DateTime.Now.Year + 10, "%d"))
+                    { config.AutoUnfriendYear = dy; SaveConfig(); StartAutoScheduler(); }
+                }
+
+                ImGui.Spacing();
+                ImGui.Text("Time:");
+                ImGui.SameLine();
+                int h24 = config.AutoUnfriendHour;
+                bool isPm = h24 >= 12;
+                int h12 = h24 % 12; if (h12 == 0) h12 = 12;
+                int m = config.AutoUnfriendMinute;
+
+                ImGui.SetNextItemWidth(60);
+                if (ImGui.DragInt("##ah", ref h12, 0.1f, 1, 12, "%02d"))
+                {
+                    h12 = Math.Clamp(h12, 1, 12);
+                    config.AutoUnfriendHour = (h12 % 12) + (isPm ? 12 : 0);
+                    SaveConfig(); StartAutoScheduler();
+                }
+                ImGui.SameLine(); ImGui.Text(":");
+                ImGui.SameLine();
+                ImGui.SetNextItemWidth(60);
+                if (ImGui.DragInt("##am", ref m, 0.1f, 0, 59, "%02d"))
+                {
+                    config.AutoUnfriendMinute = Math.Clamp(m, 0, 59);
+                    SaveConfig(); StartAutoScheduler();
+                }
+                ImGui.SameLine();
+                if (ImGui.Button(isPm ? "PM" : "AM"))
+                {
+                    isPm = !isPm;
+                    config.AutoUnfriendHour = (h12 % 12) + (isPm ? 12 : 0);
+                    SaveConfig(); StartAutoScheduler();
+                }
+
+                ImGui.Spacing();
+                ImGui.Text("Mode:");
+                ImGui.SameLine();
+                int mode = config.AutoUnfriendMode;
+                ImGui.SetNextItemWidth(230);
+                if (ImGui.Combo("##automode", ref mode, autoModes, autoModes.Length))
+                { config.AutoUnfriendMode = mode; SaveConfig(); }
+
+                ImGui.Spacing();
+                var next = GetNextScheduledRun();
+                if (next.HasValue)
+                {
+                    var col = next.Value < DateTime.Now ? new Vector4(1f, 0.5f, 0.3f, 1f) : new Vector4(0.4f, 0.9f, 0.5f, 1f);
+                    ImGui.TextColored(col, $"Next run: {next.Value:ddd dd MMM yyyy  hh:mm tt}");
+                }
+                else
+                {
+                    ImGui.TextColored(new Vector4(1f, 0.5f, 0.3f, 1f), "Next run: invalid date");
+                }
+            }
         }
 
+        // ==================== UPDATE MANAGER METHODS ====================
         static async Task CheckForUpdatesAsync()
         {
             checkingForUpdate = true;
@@ -1915,6 +2408,230 @@ namespace Unfriendmaxxing
                 downloadProgress = 0f;
             }
         }
+        // ================================================================
+
+        static DateTime? GetNextScheduledRun()
+        {
+            var now = DateTime.Now;
+            int h = config.AutoUnfriendHour, mi = config.AutoUnfriendMinute;
+            try
+            {
+                switch (config.AutoUnfriendScheduleType)
+                {
+                    case 0:
+                        var daily = new DateTime(now.Year, now.Month, now.Day, h, mi, 0);
+                        if (daily <= now) daily = daily.AddDays(1);
+                        return daily;
+
+                    case 1:
+                        int targetWeekday = Math.Clamp(config.AutoUnfriendMonthDay, 0, 6);
+                        var weekly = new DateTime(now.Year, now.Month, now.Day, h, mi, 0);
+                        int daysToAdd = (targetWeekday - (int)weekly.DayOfWeek + 7) % 7;
+                        if (daysToAdd == 0 && weekly.TimeOfDay <= now.TimeOfDay)
+                            daysToAdd = 7;
+                        return weekly.AddDays(daysToAdd);
+
+                    case 2:
+                        int mday = Math.Clamp(config.AutoUnfriendMonthDay, 1, 28);
+                        var monthly = new DateTime(now.Year, now.Month, mday, h, mi, 0);
+                        if (monthly <= now) monthly = monthly.AddMonths(1);
+                        return monthly;
+
+                    case 3:
+                        return new DateTime(config.AutoUnfriendYear, config.AutoUnfriendMonth, config.AutoUnfriendDay, h, mi, 0);
+
+                    default: return null;
+                }
+            }
+            catch { return null; }
+        }
+
+        static DateTime? GetLastExpectedRun()
+        {
+            var now = DateTime.Now;
+            int h = config.AutoUnfriendHour, mi = config.AutoUnfriendMinute;
+            try
+            {
+                switch (config.AutoUnfriendScheduleType)
+                {
+                    case 0:
+                        var daily = new DateTime(now.Year, now.Month, now.Day, h, mi, 0);
+                        if (daily > now) daily = daily.AddDays(-1);
+                        return daily;
+
+                    case 1:
+                        int targetWeekday = Math.Clamp(config.AutoUnfriendMonthDay, 0, 6);
+                        var weekly = new DateTime(now.Year, now.Month, now.Day, h, mi, 0);
+                        int daysBack = ((int)weekly.DayOfWeek - targetWeekday + 7) % 7;
+                        if (daysBack == 0 && weekly.TimeOfDay > now.TimeOfDay)
+                            daysBack = 7;
+                        return weekly.AddDays(-daysBack);
+
+                    case 2:
+                        int mday = Math.Clamp(config.AutoUnfriendMonthDay, 1, 28);
+                        var monthly = new DateTime(now.Year, now.Month, mday, h, mi, 0);
+                        if (monthly > now) monthly = monthly.AddMonths(-1);
+                        return monthly;
+
+                    case 3:
+                        return new DateTime(config.AutoUnfriendYear, config.AutoUnfriendMonth, config.AutoUnfriendDay, h, mi, 0);
+
+                    default: return null;
+                }
+            }
+            catch { return null; }
+        }
+
+        static void StartAutoScheduler()
+        {
+            autoCts?.Cancel();
+            autoCts = new CancellationTokenSource();
+            var token = autoCts.Token;
+
+            _ = Task.Run(async () =>
+            {
+                if (config.AutoUnfriendEnabled && config.AutoUnfriendLastRun != null)
+                {
+                    var lastExpected = GetLastExpectedRun();
+                    bool missedRun = lastExpected.HasValue && lastExpected.Value < DateTime.Now && config.AutoUnfriendLastRun < lastExpected.Value;
+
+                    if (missedRun)
+                    {
+                        Console.WriteLine($"[SCHEDULER] Missed run detected (expected {lastExpected:g}), running now");
+                        await RunAutoUnfriendAsync(token);
+                        if (token.IsCancellationRequested) return;
+                    }
+                }
+
+                while (!token.IsCancellationRequested && config.AutoUnfriendEnabled)
+                {
+                    var target = GetNextScheduledRun();
+                    if (!target.HasValue || target.Value <= DateTime.Now) break;
+
+                    try { await Task.Delay(target.Value - DateTime.Now, token); }
+                    catch (OperationCanceledException) { break; }
+
+                    if (token.IsCancellationRequested) break;
+
+                    await RunAutoUnfriendAsync(token);
+
+                    if (config.AutoUnfriendScheduleType == 3)
+                    {
+                        config.AutoUnfriendEnabled = false;
+                        SaveConfig();
+                        break;
+                    }
+                }
+            }, token);
+        }
+
+        static async Task RunAutoUnfriendAsync(CancellationToken token)
+        {
+            try
+            {
+                await Refresh();
+
+                List<SafeLimitedUserFriend> toUnfriend = config.AutoUnfriendMode switch
+                {
+                    0 => shown.Where(f => string.IsNullOrEmpty(f.LastLogin) || DateTime.Parse(f.LastLogin) < DateTime.UtcNow.AddMonths(-3)).ToList(),
+                    1 => shown.ToList(),
+                    2 => selected.Count > 0 ? selected.Where(i => i < shown.Count).Select(i => shown[i]).ToList() : shown.ToList(),
+                    _ => new List<SafeLimitedUserFriend>()
+                };
+
+                if (toUnfriend.Count == 0)
+                {
+                    ShowToast("Auto-Unfriend", "Nothing to unfriend");
+                    config.AutoUnfriendLastRun = DateTime.Now;
+                    SaveConfig();
+                    return;
+                }
+
+                autoConfirmTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+                pendingAutoCount = toUnfriend.Count;
+                autoConfirmDeadline = DateTime.Now.AddSeconds(15);
+                pendingAutoConfirm = true;
+
+                var confirmTask = autoConfirmTcs.Task;
+
+                bool confirmed = false;
+                try
+                {
+                    using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+                    confirmed = await confirmTask.WaitAsync(timeoutCts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    confirmed = true;
+                    lock (autoConfirmLock)
+                    {
+                        autoConfirmTcs?.TrySetResult(true);
+                        autoConfirmTcs = null;
+                    }
+                    pendingAutoConfirm = false;
+                }
+
+                if (!confirmed) { ShowToast("Auto-Unfriend", "Cancelled"); return; }
+
+                foreach (var u in toUnfriend)
+                {
+                    if (token.IsCancellationRequested) break;
+                    try
+                    {
+                        await api.UnfriendAsync(u.Id);
+                        ShowUnfriendToast(u.DisplayName);
+                        await Task.Delay(Random.Shared.Next(7000, 13000), token);
+                    }
+                    catch { }
+                }
+
+                ShowToast("Auto-Unfriend", $"Removed {toUnfriend.Count} friends");
+                config.AutoUnfriendLastRun = DateTime.Now;
+                SaveConfig();
+                await Refresh();
+            }
+            catch { }
+        }
+
+        static async Task StartUnfriendProcess()
+        {
+            isUnfriending = true; isPaused = false;
+            unfriendTotal = selected.Count; unfriendDone = 0;
+            unfriendCts = new CancellationTokenSource();
+            var list = selected.Select(i => shown[i]).ToList();
+
+            try
+            {
+                for (int i = 0; i < list.Count; i++)
+                {
+                    while (isPaused && !unfriendCts.Token.IsCancellationRequested)
+                        await Task.Delay(200, unfriendCts.Token);
+
+                    if (unfriendCts.Token.IsCancellationRequested) break;
+
+                    var u = list[i];
+                    status = $"Unfriending {u.DisplayName}...";
+                    try
+                    {
+                        await api.UnfriendAsync(u.Id);
+                        unfriendDone++;
+                        ShowUnfriendToast(u.DisplayName);
+                    }
+                    catch (Exception ex) { Console.WriteLine(ex.Message); }
+
+                    if (i < list.Count - 1)
+                        await Task.Delay(Random.Shared.Next(7000, 13000), unfriendCts.Token);
+                }
+            }
+            finally
+            {
+                isUnfriending = false; isPaused = false;
+                status = unfriendDone == unfriendTotal ? "All done!" : "Cancelled";
+                ShowToast("Unfriend Complete", $"{unfriendDone} users removed");
+                selected.Clear();
+                await Refresh();
+            }
+        }
 
         static async Task Refresh()
         {
@@ -1960,7 +2677,10 @@ namespace Unfriendmaxxing
             {
                 incomingFriendRequests = await api.GetIncomingFriendRequestsAsync();
             }
-            catch { }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[FriendRequests] Refresh error: {ex.Message}");
+            }
         }
 
         static void StartAutoDeclineChecker()
@@ -1971,18 +2691,109 @@ namespace Unfriendmaxxing
 
             _ = Task.Run(async () =>
             {
+                Console.WriteLine("[AutoDecline] Checker started");
+
                 while (!token.IsCancellationRequested)
                 {
                     if (config.AutoDeclineFriendRequests && isLoggedIn)
                     {
                         try
                         {
-                            incomingFriendRequests = await api.GetIncomingFriendRequestsAsync();
+                            var requests = await api.GetIncomingFriendRequestsAsync();
+
+                            incomingFriendRequests = requests;
+
+                            if (requests.Count > 0)
+                            {
+                                Console.WriteLine($"[AutoDecline] Processing {requests.Count} request(s)");
+
+                                var friendIds = new HashSet<string>(friends.Select(f => f.Id));
+
+                                Dictionary<string, long>? timeMap = null;
+                                if (config.AutoDeclineOnlyFromStrangers && VrcxDataService.IsAvailable)
+                                {
+                                    timeMap = await Task.Run(() => VrcxDataService.LoadTimeSpentSeconds());
+                                }
+
+                                int declined = 0;
+                                foreach (var req in requests)
+                                {
+                                    if (token.IsCancellationRequested) break;
+
+                                    string senderId = req.SenderUserId ?? "";
+                                    string senderName = req.SenderUsername ?? senderId;
+
+                                    if (string.IsNullOrEmpty(senderId))
+                                    {
+                                        Console.WriteLine($"[AutoDecline] Skipping request with empty sender ID");
+                                        continue;
+                                    }
+
+                                    if (config.AutoDeclineOnlyFromStrangers)
+                                    {
+                                        bool isKnown = await api.IsKnownPlayerAsync(senderId, friendIds, timeMap);
+                                        if (isKnown)
+                                        {
+                                            Console.WriteLine($"[AutoDecline] Skipping {senderName} — known player");
+                                            continue;
+                                        }
+                                    }
+
+                                    try
+                                    {
+                                        await api.DeclineFriendRequestAsync(req.Id);
+                                        declined++;
+                                        Console.WriteLine($"[AutoDecline] Declined request from {senderName}");
+
+                                        if (config.AutoSendRequestBack)
+                                        {
+                                            try
+                                            {
+                                                await api.SendFriendRequestAsync(senderId);
+                                                Console.WriteLine($"[AutoDecline] Sent request back to {senderName}");
+                                            }
+                                            catch (Exception ex)
+                                            {
+                                                Console.WriteLine($"[AutoDecline] Failed to send request back to {senderName}: {ex.Message}");
+                                            }
+                                        }
+
+                                        await Task.Delay(2500, token);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine($"[AutoDecline] Failed to decline {senderName}: {ex.Message}");
+                                    }
+                                }
+
+                                if (declined > 0)
+                                {
+                                    incomingFriendRequests = await api.GetIncomingFriendRequestsAsync();
+                                    ShowToast("Auto-Decline", $"Declined {declined} friend request(s)");
+                                }
+                            }
                         }
-                        catch { }
+                        catch (OperationCanceledException)
+                        {
+                            break;
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[AutoDecline] Cycle error: {ex.Message}");
+                        }
                     }
-                    await Task.Delay(60000, token);
+
+                    try
+                    {
+                        await Task.Delay(TimeSpan.FromSeconds(60), token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
                 }
+
+                Console.WriteLine("[AutoDecline] Checker stopped");
             }, token);
         }
 
@@ -2009,11 +2820,196 @@ namespace Unfriendmaxxing
         static void ShowToast(string title, string msg)
         {
             Console.WriteLine($"[Toast] {title}: {msg}");
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                try { Process.Start("notify-send", $"\"{title}\" \"{msg}\""); } catch { }
+            }
         }
 
-        static void InstallLinuxDesktopEntry() { }
-        static void UpdateStartup(bool enable) { }
-        static void UpdateVrcxShortcut(string subfolder, bool enable) { }
+        static void InstallLinuxDesktopEntry()
+        {
+            try
+            {
+                string exePath = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                if (string.IsNullOrEmpty(exePath)) return;
+
+                string exeDir = Path.GetDirectoryName(exePath) ?? "";
+
+                string? iconSrc = null;
+                var searchDirs = new List<string> { exeDir, Directory.GetCurrentDirectory() };
+                var dir = exeDir;
+                for (int i = 0; i < 3; i++)
+                {
+                    dir = Path.GetDirectoryName(dir) ?? "";
+                    if (!string.IsNullOrEmpty(dir)) searchDirs.Add(dir);
+                }
+                foreach (var d in searchDirs)
+                    foreach (var name in new[] { "icon.png", "icon.ico" })
+                    {
+                        var p = Path.Combine(d, name);
+                        if (File.Exists(p)) { iconSrc = Path.GetFullPath(p); break; }
+                    }
+
+                string iconName = "vrchat-unfriend-manager";
+                string iconDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "icons", "hicolor", "256x256", "apps");
+                Directory.CreateDirectory(iconDir);
+                string iconDest = Path.Combine(iconDir, $"{iconName}.png");
+
+                if (iconSrc != null && (!File.Exists(iconDest) || File.GetLastWriteTimeUtc(iconSrc) > File.GetLastWriteTimeUtc(iconDest)))
+                {
+                    if (iconSrc.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
+                    {
+                        bool converted = false;
+                        try
+                        {
+                            var psi = new ProcessStartInfo("convert", $"\"{iconSrc}[0]\" \"{iconDest}\"") { UseShellExecute = false, RedirectStandardError = true };
+                            var proc = Process.Start(psi);
+                            proc?.WaitForExit(5000);
+                            converted = proc?.ExitCode == 0 && File.Exists(iconDest);
+                        }
+                        catch { }
+
+                        if (!converted)
+                        {
+                            try
+                            {
+                                var psi = new ProcessStartInfo("magick", $"\"{iconSrc}[0]\" \"{iconDest}\"") { UseShellExecute = false, RedirectStandardError = true };
+                                var proc = Process.Start(psi);
+                                proc?.WaitForExit(5000);
+                                converted = proc?.ExitCode == 0 && File.Exists(iconDest);
+                            }
+                            catch { }
+                        }
+                    }
+                    else
+                    {
+                        File.Copy(iconSrc, iconDest, true);
+                    }
+                }
+
+                string desktopDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".local", "share", "applications");
+                Directory.CreateDirectory(desktopDir);
+                string desktopPath = Path.Combine(desktopDir, $"{iconName}.desktop");
+
+                string iconLine = File.Exists(iconDest) ? iconName : "application-x-executable";
+                string desktop =
+                    "[Desktop Entry]\n" +
+                    "Type=Application\n" +
+                    "Name=VRChat Unfriend Manager\n" +
+                    "Comment=Manage and unfriend VRChat friends\n" +
+                    $"Exec={exePath}\n" +
+                    $"Icon={iconLine}\n" +
+                    "Categories=Utility;\n" +
+                    "Terminal=false\n" +
+                    "StartupNotify=true\n";
+
+                if (!File.Exists(desktopPath) || File.ReadAllText(desktopPath) != desktop)
+                {
+                    File.WriteAllText(desktopPath, desktop);
+                    try { Process.Start(new ProcessStartInfo("update-desktop-database", desktopDir) { UseShellExecute = false }); } catch { }
+                }
+            }
+            catch { }
+        }
+
+        static void UpdateStartup(bool enable)
+        {
+            var exePath = Process.GetCurrentProcess().MainModule?.FileName;
+            if (string.IsNullOrEmpty(exePath)) return;
+            string cmdArgs = $"\"{exePath}\" --autostart";
+
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                try
+                {
+                    using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", true);
+                    if (enable) key?.SetValue("VRChatUnfriendManager", cmdArgs);
+                    else key?.DeleteValue("VRChatUnfriendManager", false);
+                }
+                catch { }
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                try
+                {
+                    string autostartDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "autostart");
+                    Directory.CreateDirectory(autostartDir);
+                    string desktopFile = Path.Combine(autostartDir, "VRChatUnfriendManager.desktop");
+                    if (enable)
+                        File.WriteAllText(desktopFile, $"[Desktop Entry]\nType=Application\nName=VRChat Unfriend Manager\nExec={cmdArgs}\nTerminal=false\n");
+                    else if (File.Exists(desktopFile))
+                        File.Delete(desktopFile);
+                }
+                catch { }
+            }
+        }
+
+        [ComImport, Guid("00021401-0000-0000-C000-000000000046")] class ShellLink { }
+        [ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IShellLinkW
+        {
+            void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszFile, int cchMaxPath, IntPtr pfd, uint fFlags);
+            void GetIDList(out IntPtr ppidl);
+            void SetIDList(IntPtr pidl);
+            void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszName, int cchMaxName);
+            void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
+            void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszDir, int cchMaxPath);
+            void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
+            void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszArgs, int cchMaxPath);
+            void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
+            void GetHotkey(out short pwHotkey);
+            void SetHotkey(short wHotkey);
+            void GetShowCmd(out int piShowCmd);
+            void SetShowCmd(int iShowCmd);
+            void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszIconPath, int cchIconPath, out int piIcon);
+            void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
+            void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string pszPathRel, uint dwReserved);
+            void Resolve(IntPtr hwnd, uint fFlags);
+            void SetPath([MarshalAs(UnmanagedType.LPWStr)] string pszFile);
+        }
+        [ComImport, Guid("0000010b-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+        interface IPersistFile
+        {
+            void GetClassID(out Guid pClassID);
+            void IsDirty();
+            void Load([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, uint dwMode);
+            void Save([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, bool fRemember);
+            void SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string pszFileName);
+            void GetCurFile([MarshalAs(UnmanagedType.LPWStr)] out string ppszFileName);
+        }
+        static void CreateShellLink(string lnkPath, string targetPath, string arguments)
+        {
+            var link = (IShellLinkW)new ShellLink();
+            link.SetPath(targetPath);
+            link.SetArguments(arguments);
+            link.SetWorkingDirectory(Path.GetDirectoryName(targetPath) ?? "");
+            ((IPersistFile)link).Save(lnkPath, false);
+        }
+
+        static void UpdateVrcxShortcut(string subfolder, bool enable)
+        {
+            try
+            {
+                var targetDir = Path.Combine(Paths.VrcxStartup, subfolder);
+                Directory.CreateDirectory(targetDir);
+                var exePath = Process.GetCurrentProcess().MainModule?.FileName;
+                if (string.IsNullOrEmpty(exePath)) return;
+
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    string lnkPath = Path.Combine(targetDir, "VRChatUnfriendManager.lnk");
+                    if (File.Exists(lnkPath)) File.Delete(lnkPath);
+                    if (enable) CreateShellLink(lnkPath, exePath, "--autostart");
+                }
+                else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                {
+                    string linkPath = Path.Combine(targetDir, "VRChatUnfriendManager");
+                    if (File.Exists(linkPath)) File.Delete(linkPath);
+                    if (enable) File.CreateSymbolicLink(linkPath, exePath);
+                }
+            }
+            catch { }
+        }
 
         static void LoadConfig()
         {
@@ -2058,126 +3054,6 @@ namespace Unfriendmaxxing
                 File.WriteAllText(Paths.ConfigFile, JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }));
             }
             catch { }
-        }
-
-        static void StartAutoScheduler()
-        {
-            autoCts?.Cancel();
-            autoCts = new CancellationTokenSource();
-            var token = autoCts.Token;
-
-            _ = Task.Run(async () =>
-            {
-                while (!token.IsCancellationRequested && config.AutoUnfriendEnabled)
-                {
-                    var target = GetNextScheduledRun();
-                    if (!target.HasValue || target.Value <= DateTime.Now) break;
-
-                    try { await Task.Delay(target.Value - DateTime.Now, token); }
-                    catch (OperationCanceledException) { break; }
-
-                    if (token.IsCancellationRequested) break;
-
-                    await RunAutoUnfriendAsync(token);
-                }
-            }, token);
-        }
-
-        static async Task RunAutoUnfriendAsync(CancellationToken token)
-        {
-            try
-            {
-                await Refresh();
-
-                List<SafeLimitedUserFriend> toUnfriend = config.AutoUnfriendMode switch
-                {
-                    0 => shown.Where(f => string.IsNullOrEmpty(f.LastLogin) || DateTime.Parse(f.LastLogin) < DateTime.UtcNow.AddMonths(-3)).ToList(),
-                    1 => shown.ToList(),
-                    2 => selected.Count > 0 ? selected.Where(i => i < shown.Count).Select(i => shown[i]).ToList() : shown.ToList(),
-                    _ => new List<SafeLimitedUserFriend>()
-                };
-
-                if (toUnfriend.Count == 0) return;
-
-                autoConfirmTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-                pendingAutoCount = toUnfriend.Count;
-                autoConfirmDeadline = DateTime.Now.AddSeconds(15);
-                pendingAutoConfirm = true;
-
-                var confirmed = await autoConfirmTcs.Task;
-
-                if (!confirmed) return;
-
-                foreach (var u in toUnfriend)
-                {
-                    if (token.IsCancellationRequested) break;
-                    try
-                    {
-                        await api.UnfriendAsync(u.Id);
-                        await Task.Delay(Random.Shared.Next(7000, 13000), token);
-                    }
-                    catch { }
-                }
-
-                await Refresh();
-            }
-            catch { }
-        }
-
-        static async Task StartUnfriendProcess()
-        {
-            isUnfriending = true; isPaused = false;
-            unfriendTotal = selected.Count; unfriendDone = 0;
-            unfriendCts = new CancellationTokenSource();
-            var list = selected.Select(i => shown[i]).ToList();
-
-            try
-            {
-                for (int i = 0; i < list.Count; i++)
-                {
-                    while (isPaused && !unfriendCts.Token.IsCancellationRequested)
-                        await Task.Delay(200, unfriendCts.Token);
-
-                    if (unfriendCts.Token.IsCancellationRequested) break;
-
-                    var u = list[i];
-                    status = $"Unfriending {u.DisplayName}...";
-                    try
-                    {
-                        await api.UnfriendAsync(u.Id);
-                        unfriendDone++;
-                    }
-                    catch { }
-
-                    if (i < list.Count - 1)
-                        await Task.Delay(Random.Shared.Next(7000, 13000), unfriendCts.Token);
-                }
-            }
-            finally
-            {
-                isUnfriending = false; isPaused = false;
-                status = unfriendDone == unfriendTotal ? "All done!" : "Cancelled";
-                selected.Clear();
-                await Refresh();
-            }
-        }
-
-        static DateTime? GetNextScheduledRun()
-        {
-            var now = DateTime.Now;
-            int h = config.AutoUnfriendHour, mi = config.AutoUnfriendMinute;
-            try
-            {
-                switch (config.AutoUnfriendScheduleType)
-                {
-                    case 0:
-                        var daily = new DateTime(now.Year, now.Month, now.Day, h, mi, 0);
-                        if (daily <= now) daily = daily.AddDays(1);
-                        return daily;
-                    default: return null;
-                }
-            }
-            catch { return null; }
         }
     }
 }
