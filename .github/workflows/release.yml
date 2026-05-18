@@ -15,9 +15,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup .NET 10.0
+      - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
+          # Note: If 10.0.x is too new/unavailable on the runner, change to '8.0.x' or '9.0.x'
           dotnet-version: '10.0.x'
 
       - name: Restore dependencies
@@ -38,8 +39,9 @@ jobs:
             -p:DebugType=embedded `
             -p:EnableCompressionInSingleFile=true `
             -p:PublishTrimmed=false `
+            -p:AssemblyName=VRCUFM `
             -p:InformationalVersion=${{ steps.version.outputs.version }} `
-            -o ./publish XOSC.csproj
+            -o ./publish
         shell: powershell
 
       - name: Create/Update Release
