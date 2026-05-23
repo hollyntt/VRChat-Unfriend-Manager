@@ -1032,24 +1032,34 @@ namespace Unfriendmaxxing
             {
                 _trayRunning = false;
 
-                if (_notifyIcon != null)
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
                 {
-                    try
+                    // Ask the WinForms message pump to exit on its own thread.
+                    // RunWindowsTray will then hide + dispose the NotifyIcon itself,
+                    // which is the only safe way to guarantee the tray icon vanishes.
+                    try { Application.ExitThread(); } catch { }
+
+                    // Give the tray thread a moment to clean up before we return,
+                    // so the icon is gone before the process exits.
+                    trayThread?.Join(2000);
+
+                    // Belt-and-suspenders: if the thread didn't exit cleanly, hide
+                    // the icon from this thread as a last resort.
+                    if (_notifyIcon != null)
                     {
-                        _notifyIcon.Visible = false;
-                        _notifyIcon.Dispose();
+                        try { _notifyIcon.Visible = false; _notifyIcon.Dispose(); } catch { }
                         _notifyIcon = null;
                     }
-                    catch { }
                 }
 
+                // Linux: kill the pystray subprocess and close the socket.
                 try { _linuxTrayProcess?.Kill(); } catch { }
                 _linuxTrayProcess = null;
 
                 try { _linuxTraySocket?.Close(); } catch { }
                 _linuxTraySocket = null;
 
-                trayThread?.Join(3000);
+                trayThread?.Join(1000);
                 trayThread = null;
             }
         }
@@ -1114,9 +1124,18 @@ namespace Unfriendmaxxing
 
                 Application.Run();
 
-                _notifyIcon.Visible = false;
-                _notifyIcon.Dispose();
-                _notifyIcon = null;
+                // Application.Run() has returned — the pump is stopped.
+                // Hide and dispose the icon on this (correct) thread.
+                try
+                {
+                    if (_notifyIcon != null)
+                    {
+                        _notifyIcon.Visible = false;
+                        _notifyIcon.Dispose();
+                        _notifyIcon = null;
+                    }
+                }
+                catch { }
             }
             catch (Exception ex)
             {
@@ -1404,12 +1423,14 @@ tray.run()
             autoDeclineCts?.Cancel();
             unfriendCts?.Cancel();
 
+            // Stop the tray first so the icon disappears before the window closes
+            StopTrayThread();
+
             SaveConfig();
             TextureCache.UnloadAll();
             rlImGui.Shutdown();
             Raylib.CloseWindow();
 
-            StopTrayThread();
             Environment.Exit(0);
         }
 
