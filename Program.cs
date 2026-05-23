@@ -911,12 +911,63 @@ namespace Unfriendmaxxing
         [UnmanagedCallersOnly(CallConvs = new[] { typeof(System.Runtime.CompilerServices.CallConvCdecl) })]  private static unsafe void RaylibLogCallback(int logLevel, sbyte* text, sbyte* args) { }
         [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int cmd);
         [DllImport("user32.dll")] static extern IntPtr FindWindow(string? cls, string wnd);
+        [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
         [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hWnd, int nIndex);
         [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
-
         [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")] static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
         [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")] static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
         [DllImport("user32.dll")] static extern IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT lpPoint);
+        [DllImport("user32.dll")] static extern IntPtr CreatePopupMenu();
+        [DllImport("user32.dll")] static extern bool AppendMenu(IntPtr hMenu, uint uFlags, uint uIDNewItem, string lpNewItem);
+        [DllImport("user32.dll")] static extern bool TrackPopupMenu(IntPtr hMenu, uint uFlags, int x, int y, int nReserved, IntPtr hWnd, IntPtr prcRect);
+        [DllImport("user32.dll")] static extern bool DestroyMenu(IntPtr hMenu);
+        [DllImport("user32.dll")] static extern bool PeekMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
+        [DllImport("user32.dll")] static extern bool TranslateMessage(ref MSG lpMsg);
+        [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref MSG lpMsg);
+        [DllImport("user32.dll")] static extern IntPtr DefWindowProc(IntPtr hWnd, uint uMsg, IntPtr wParam, IntPtr lParam);
+        [DllImport("user32.dll")] static extern ushort RegisterClassEx(ref WNDCLASSEX lpwcx);
+        [DllImport("user32.dll")] static extern IntPtr CreateWindowEx(uint dwExStyle, string lpClassName, string lpWindowName, uint dwStyle, int X, int Y, int nWidth, int nHeight, IntPtr hWndParent, IntPtr hMenu, IntPtr hInstance, IntPtr lpParam);
+        [DllImport("user32.dll")] static extern bool DestroyWindow(IntPtr hWnd);
+        [DllImport("user32.dll")] static extern IntPtr LoadIcon(IntPtr hInstance, IntPtr lpIconName);
+        [DllImport("user32.dll")] static extern IntPtr LoadImage(IntPtr hInst, string name, uint type, int cx, int cy, uint fuLoad);
+        [DllImport("user32.dll")] static extern bool DestroyIcon(IntPtr hIcon);
+        [DllImport("shell32.dll", SetLastError = true)] static extern bool Shell_NotifyIcon(uint dwMessage, ref NOTIFYICONDATA lpData);
+        [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr hObject);
+        [DllImport("gdi32.dll")] static extern IntPtr CreateBitmap(int nWidth, int nHeight, uint cPlanes, uint cBitsPerPel, IntPtr lpvBits);
+        [DllImport("user32.dll")] static extern IntPtr CreateIconIndirect(ref ICONINFO piconinfo);
+
+        [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam; public IntPtr lParam; public uint time; public int ptX, ptY; }
+        [StructLayout(LayoutKind.Sequential)] struct POINT { public int X, Y; }
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct NOTIFYICONDATA
+        {
+            public uint cbSize; public IntPtr hWnd; public uint uID; public uint uFlags;
+            public uint uCallbackMessage; public IntPtr hIcon;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string szTip;
+            public uint dwState, dwStateMask;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 256)] public string szInfo;
+            public uint uTimeoutOrVersion;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)] public string szInfoTitle;
+            public uint dwInfoFlags; public Guid guidItem; public IntPtr hBalloonIcon;
+        }
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct WNDCLASSEX
+        {
+            public uint cbSize, style; public IntPtr lpfnWndProc; public int cbClsExtra, cbWndExtra;
+            public IntPtr hInstance, hIcon, hCursor, hbrBackground; public string? lpszMenuName;
+            public string lpszClassName; public IntPtr hIconSm;
+        }
+        [StructLayout(LayoutKind.Sequential)] struct ICONINFO { public bool fIcon; public int xHotspot, yHotspot; public IntPtr hbmMask, hbmColor; }
+
+        const uint NIM_ADD = 0, NIM_MODIFY = 1, NIM_DELETE = 2;
+        const uint NIF_MSG = 1, NIF_ICON = 2, NIF_TIP = 4;
+        const uint WM_APP = 0x8000;
+        const uint WM_TRAY_CB = WM_APP + 1;
+        const uint WM_LBUTTONDBLCLK = 0x203, WM_RBUTTONUP = 0x205;
+        const uint WM_COMMAND = 0x111, WM_DESTROY = 2;
+        const uint TPM_RIGHTBUTTON = 2;
+        const uint IMAGE_ICON = 1, LR_LOADFROMFILE = 0x10;
 
         const int SW_HIDE = 0, SW_RESTORE = 9;
         const int GWL_WNDPROC = -4;
@@ -963,8 +1014,15 @@ namespace Unfriendmaxxing
         static bool _showRequested = false;
         static bool _trayRunning = false;
         static Thread? trayThread;
-        static NotifyIcon? _notifyIcon;
         static readonly object _trayLock = new();
+
+        // Raw Win32 tray state — no WinForms NotifyIcon
+        delegate IntPtr TrayWndProc(IntPtr hwnd, uint msg, IntPtr wp, IntPtr lp);
+        static TrayWndProc? _trayWndProcDelegate;
+        static IntPtr _trayHwnd = IntPtr.Zero;
+        static IntPtr _trayHicon = IntPtr.Zero;
+        static NOTIFYICONDATA _nid;
+        static bool _nidAdded = false;
         static Process? _linuxTrayProcess;
         static System.Net.Sockets.Socket? _linuxTraySocket;
         static Thread? _linuxTrayListenerThread;
@@ -1033,114 +1091,168 @@ namespace Unfriendmaxxing
                 _trayRunning = false;
 
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                {
-                    // Ask the WinForms message pump to exit on its own thread.
-                    // RunWindowsTray will then hide + dispose the NotifyIcon itself,
-                    // which is the only safe way to guarantee the tray icon vanishes.
-                    try { Application.ExitThread(); } catch { }
+                    RemoveWin32TrayIcon();
 
-                    // Give the tray thread a moment to clean up before we return,
-                    // so the icon is gone before the process exits.
-                    trayThread?.Join(2000);
-
-                    // Belt-and-suspenders: if the thread didn't exit cleanly, hide
-                    // the icon from this thread as a last resort.
-                    if (_notifyIcon != null)
-                    {
-                        try { _notifyIcon.Visible = false; _notifyIcon.Dispose(); } catch { }
-                        _notifyIcon = null;
-                    }
-                }
-
-                // Linux: kill the pystray subprocess and close the socket.
+                // Linux: kill the pystray subprocess and close the socket
                 try { _linuxTrayProcess?.Kill(); } catch { }
                 _linuxTrayProcess = null;
-
                 try { _linuxTraySocket?.Close(); } catch { }
                 _linuxTraySocket = null;
 
-                trayThread?.Join(1000);
+                trayThread?.Join(2000);
                 trayThread = null;
             }
         }
 
-        static Icon LoadTrayIcon()
+        /// <summary>
+        /// Synchronously removes the tray icon via Shell_NotifyIcon(NIM_DELETE).
+        /// This is the only reliable way — WinForms NotifyIcon.Visible=false is async
+        /// and leaves ghost icons when the process exits uncleanly.
+        /// </summary>
+        static void RemoveWin32TrayIcon()
         {
-            string exeDir = AppDomain.CurrentDomain.BaseDirectory;
-
-            var possibleIcons = new[]
+            if (!_nidAdded) return;
+            try
             {
-                Path.Combine(exeDir, "icon.ico"),
-                Path.Combine(exeDir, "icon.png"),
-                Path.Combine(Directory.GetCurrentDirectory(), "icon.ico"),
-                Path.Combine(Directory.GetCurrentDirectory(), "icon.png")
-            };
+                _nid.uFlags = 0; // NIM_DELETE ignores flags but zero them anyway
+                Shell_NotifyIcon(NIM_DELETE, ref _nid);
+                _nidAdded = false;
+                Console.WriteLine("[TRAY] NIM_DELETE sent — icon removed");
+            }
+            catch { }
+            try { if (_trayHicon != IntPtr.Zero) { DestroyIcon(_trayHicon); _trayHicon = IntPtr.Zero; } } catch { }
+            try { if (_trayHwnd != IntPtr.Zero) { DestroyWindow(_trayHwnd); _trayHwnd = IntPtr.Zero; } } catch { }
+        }
 
-            foreach (var path in possibleIcons)
+        static IntPtr Win32TrayWndProc(IntPtr hwnd, uint msg, IntPtr wp, IntPtr lp)
+        {
+            if (msg == WM_TRAY_CB)
             {
-                if (File.Exists(path))
+                uint ev = (uint)(lp.ToInt64() & 0xFFFF);
+                if (ev == WM_LBUTTONDBLCLK)
                 {
-                    try
-                    {
-                        if (path.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
-                            return new Icon(path);
-
-                        using var bmp = new Bitmap(path);
-                        return Icon.FromHandle(bmp.GetHicon());
-                    }
-                    catch { }
+                    ShowMainWindow();
+                }
+                else if (ev == WM_RBUTTONUP)
+                {
+                    GetCursorPos(out var pt);
+                    var menu = CreatePopupMenu();
+                    AppendMenu(menu, 0, 1, "Show");
+                    AppendMenu(menu, 0x800, 0, "");
+                    AppendMenu(menu, 0, 2, "Exit");
+                    SetForegroundWindow(hwnd);
+                    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.X, pt.Y, 0, hwnd, IntPtr.Zero);
+                    DestroyMenu(menu);
                 }
             }
+            else if (msg == WM_COMMAND)
+            {
+                uint id = (uint)(wp.ToInt64() & 0xFFFF);
+                if (id == 1) ShowMainWindow();
+                else if (id == 2) { shouldExit = true; }
+            }
+            else if (msg == WM_DESTROY)
+            {
+                return IntPtr.Zero;
+            }
+            return DefWindowProc(hwnd, msg, wp, lp);
+        }
 
-            return SystemIcons.Application;
+        static IntPtr CreateHIconFromPng(string path)
+        {
+            try
+            {
+                unsafe
+                {
+                    var img = Raylib.LoadImage(path);
+                    Raylib.ImageResize(ref img, 16, 16);
+                    Raylib.ImageFormat(ref img, PixelFormat.UncompressedR8G8B8A8);
+                    int w = img.Width, h = img.Height;
+                    var pixels = new byte[w * h * 4];
+                    Marshal.Copy(new IntPtr(img.Data), pixels, 0, pixels.Length);
+                    Raylib.UnloadImage(img);
+                    for (int i = 0; i < pixels.Length; i += 4)
+                        (pixels[i], pixels[i + 2]) = (pixels[i + 2], pixels[i]);
+                    int maskStride = ((w + 15) / 16) * 2;
+                    var maskBits = new byte[maskStride * h];
+                    var colorHandle = GCHandle.Alloc(pixels, GCHandleType.Pinned);
+                    var maskHandle = GCHandle.Alloc(maskBits, GCHandleType.Pinned);
+                    IntPtr hbmColor = IntPtr.Zero, hbmMask = IntPtr.Zero;
+                    try
+                    {
+                        hbmColor = CreateBitmap(w, h, 1, 32, colorHandle.AddrOfPinnedObject());
+                        hbmMask  = CreateBitmap(w, h, 1, 1,  maskHandle.AddrOfPinnedObject());
+                    }
+                    finally { colorHandle.Free(); maskHandle.Free(); }
+                    if (hbmColor == IntPtr.Zero || hbmMask == IntPtr.Zero)
+                    {
+                        if (hbmColor != IntPtr.Zero) DeleteObject(hbmColor);
+                        if (hbmMask  != IntPtr.Zero) DeleteObject(hbmMask);
+                        return IntPtr.Zero;
+                    }
+                    var ii = new ICONINFO { fIcon = true, hbmColor = hbmColor, hbmMask = hbmMask };
+                    var hicon = CreateIconIndirect(ref ii);
+                    DeleteObject(hbmColor);
+                    DeleteObject(hbmMask);
+                    return hicon;
+                }
+            }
+            catch { return IntPtr.Zero; }
         }
 
         static void RunWindowsTray(bool autostart)
         {
+            // Create a hidden message-only window to receive tray callbacks
+            _trayWndProcDelegate = Win32TrayWndProc;
+            var wc = new WNDCLASSEX
+            {
+                cbSize = (uint)Marshal.SizeOf<WNDCLASSEX>(),
+                lpfnWndProc = Marshal.GetFunctionPointerForDelegate(_trayWndProcDelegate),
+                lpszClassName = "VUMTray2",
+                hInstance = IntPtr.Zero,
+            };
+            RegisterClassEx(ref wc);
+            _trayHwnd = CreateWindowEx(0, "VUMTray2", "", 0, 0, 0, 0, 0,
+                new IntPtr(-3), IntPtr.Zero, IntPtr.Zero, IntPtr.Zero); // HWND_MESSAGE
+
+            // Load icon: prefer .ico, fall back to .png→HICON, then system default
+            _trayHicon = IntPtr.Zero;
+            string exeDir = Path.GetDirectoryName(Process.GetCurrentProcess().MainModule?.FileName ?? "") ?? "";
+            foreach (var dir in new[] { exeDir, Directory.GetCurrentDirectory() })
+            {
+                var ico = Path.Combine(dir, "icon.ico");
+                if (File.Exists(ico)) { _trayHicon = LoadImage(IntPtr.Zero, ico, IMAGE_ICON, 16, 16, LR_LOADFROMFILE); if (_trayHicon != IntPtr.Zero) break; }
+                var png = Path.Combine(dir, "icon.png");
+                if (File.Exists(png)) { _trayHicon = CreateHIconFromPng(png); if (_trayHicon != IntPtr.Zero) break; }
+            }
+            if (_trayHicon == IntPtr.Zero) _trayHicon = LoadIcon(IntPtr.Zero, new IntPtr(32512));
+
+            // Add the tray icon — NIM_ADD is synchronous with the shell
+            _nid = new NOTIFYICONDATA
+            {
+                cbSize           = (uint)Marshal.SizeOf<NOTIFYICONDATA>(),
+                hWnd             = _trayHwnd,
+                uID              = 1,
+                uFlags           = NIF_MSG | NIF_ICON | NIF_TIP,
+                uCallbackMessage = WM_TRAY_CB,
+                hIcon            = _trayHicon,
+                szTip            = "VRChat Unfriend Manager",
+            };
+            _nidAdded = Shell_NotifyIcon(NIM_ADD, ref _nid);
+            Console.WriteLine($"[TRAY] NIM_ADD: {_nidAdded}, hWnd={_trayHwnd}, hIcon={_trayHicon}");
+
             if (autostart) HideMainWindow();
 
-            try
+            // Pump messages until we're told to stop
+            while (_trayRunning && !shouldExit)
             {
-                ApplicationConfiguration.Initialize();
-
-                var icon = LoadTrayIcon();
-
-                _notifyIcon = new NotifyIcon
-                {
-                    Icon = icon,
-                    Text = "VRChat Unfriend Manager",
-                    Visible = true,
-                };
-
-                var menu = new ContextMenuStrip();
-                menu.Items.Add("Show", null, (_, _) => ShowMainWindow());
-                menu.Items.Add(new ToolStripSeparator());
-                menu.Items.Add("Exit", null, (_, _) => { shouldExit = true; Application.ExitThread(); });
-
-                _notifyIcon.ContextMenuStrip = menu;
-                _notifyIcon.DoubleClick += (_, _) => ShowMainWindow();
-
-                Console.WriteLine("[TRAY] NotifyIcon created successfully");
-
-                Application.Run();
-
-                // Application.Run() has returned — the pump is stopped.
-                // Hide and dispose the icon on this (correct) thread.
-                try
-                {
-                    if (_notifyIcon != null)
-                    {
-                        _notifyIcon.Visible = false;
-                        _notifyIcon.Dispose();
-                        _notifyIcon = null;
-                    }
-                }
-                catch { }
+                if (PeekMessage(out var m, IntPtr.Zero, 0, 0, 1))
+                { TranslateMessage(ref m); DispatchMessage(ref m); }
+                else Thread.Sleep(10);
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[TRAY] RunWindowsTray failed: {ex.Message}");
-            }
+
+            // Clean up synchronously before the thread exits
+            RemoveWin32TrayIcon();
         }
 
         static void RunLinuxTray(bool autostart)
@@ -1423,7 +1535,7 @@ tray.run()
             autoDeclineCts?.Cancel();
             unfriendCts?.Cancel();
 
-            // Stop the tray first so the icon disappears before the window closes
+            // Stop tray first — NIM_DELETE must fire before the process dies
             StopTrayThread();
 
             SaveConfig();
