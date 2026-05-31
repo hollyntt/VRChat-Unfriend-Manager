@@ -71,6 +71,7 @@ namespace Unfriendmaxxing
         public int AutoUnfriendDay { get; set; } = DateTime.Now.Day;
         public DateTime? AutoUnfriendLastRun { get; set; } = null;
         public bool RunOnStartup { get; set; } = false;
+        public bool StartMenuShortcut { get; set; } = false;
         public bool VrcxStartupDesktop { get; set; } = false;
         public bool VrcxStartupVr { get; set; } = false;
         public bool HideInTaskbar { get; set; } = true;
@@ -2153,6 +2154,14 @@ tray.run()
                 UpdateStartup(runOnStartup);
             }
 
+            bool startMenuShortcut = config.StartMenuShortcut;
+            if (ImGui.Checkbox("Create Start Menu shortcut", ref startMenuShortcut))
+            {
+                config.StartMenuShortcut = startMenuShortcut;
+                SaveConfig();
+                UpdateStartMenuShortcut(startMenuShortcut);
+            }
+
             bool hideInTaskbar = config.HideInTaskbar;
             if (ImGui.Checkbox("Enable System Tray (Hide from taskbar)", ref hideInTaskbar))
             {
@@ -3086,6 +3095,51 @@ cd ""$DEST_DIR"" && chmod +x ""$EXE_NAME"" && ./""$EXE_NAME"" &
                 }
                 catch { }
             }
+        }
+
+        static void UpdateStartMenuShortcut(bool enable)
+        {
+            try
+            {
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+                    string startMenuDir = Path.Combine(
+                        Environment.GetFolderPath(Environment.SpecialFolder.Programs),
+                        "VRChat Unfriend Manager");
+                    string lnkPath = Path.Combine(startMenuDir, "VRChat Unfriend Manager.lnk");
+
+                    if (enable)
+                    {
+                        var exePath = Process.GetCurrentProcess().MainModule?.FileName;
+                        if (string.IsNullOrEmpty(exePath)) return;
+                        Directory.CreateDirectory(startMenuDir);
+                        CreateShellLink(lnkPath, exePath, "");
+                    }
+                    else
+                    {
+                        if (File.Exists(lnkPath)) File.Delete(lnkPath);
+                        try { Directory.Delete(startMenuDir); } catch { }
+                    }
+                }
+                else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                {
+                    // On Linux the .desktop file in ~/.local/share/applications IS the
+                    // Start-menu / app-launcher entry — install or remove it.
+                    if (enable)
+                        InstallLinuxDesktopEntry();
+                    else
+                    {
+                        string desktopPath = Path.Combine(
+                            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                            ".local", "share", "applications",
+                            "vrchat-unfriend-manager.desktop");
+                        if (File.Exists(desktopPath)) File.Delete(desktopPath);
+                        string desktopDir = Path.GetDirectoryName(desktopPath)!;
+                        try { Process.Start(new ProcessStartInfo("update-desktop-database", desktopDir) { UseShellExecute = false }); } catch { }
+                    }
+                }
+            }
+            catch { }
         }
 
         [ComImport, Guid("00021401-0000-0000-C000-000000000046")] class ShellLink { }
