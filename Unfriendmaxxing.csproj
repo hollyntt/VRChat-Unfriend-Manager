@@ -2,7 +2,7 @@
 
     <PropertyGroup>
         <OutputType>WinExe</OutputType>
-        <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+        <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -24,7 +24,8 @@
 
     <!-- Windows: DPI-aware manifest so the exe icon renders properly -->
     <PropertyGroup Condition="$([MSBuild]::IsOsPlatform('Windows'))">
-        <ApplicationManifest>app.manifest</ApplicationManifest>
+        <DefineConstants>$(DefineConstants);WINDOWS_BUILD</DefineConstants>
+        <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework><TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
     </PropertyGroup>
 
     <ItemGroup>
