@@ -582,13 +582,15 @@ namespace Unfriendmaxxing
         public async Task DeclineFriendRequestAsync(string notificationId)
         {
             var http = GetAuthClient();
-            var url = $"https://api.vrchat.cloud/api/1/auth/user/notifications/{notificationId}/hide";
-            var resp = await http.PutAsync(url, new StringContent("{}", Encoding.UTF8, "application/json"));
-
-            if (!resp.IsSuccessStatusCode)
+            // DELETE is the correct decline — removes the request entirely rather than just hiding it from your view
+            var delResp = await http.DeleteAsync($"https://api.vrchat.cloud/api/1/auth/user/notifications/{notificationId}");
+            if (!delResp.IsSuccessStatusCode)
             {
-                var delResp = await http.DeleteAsync($"https://api.vrchat.cloud/api/1/auth/user/notifications/{notificationId}");
-                if (!delResp.IsSuccessStatusCode)
+                // Fallback: at least hide it
+                var hideResp = await http.PutAsync(
+                    $"https://api.vrchat.cloud/api/1/auth/user/notifications/{notificationId}/hide",
+                    new StringContent("{}", Encoding.UTF8, "application/json"));
+                if (!hideResp.IsSuccessStatusCode)
                     Console.WriteLine($"[FriendRequests] Decline failed for {notificationId}: {delResp.StatusCode}");
             }
         }
@@ -2848,7 +2850,14 @@ cd ""$DEST_DIR"" && chmod +x ""$EXE_NAME"" && ./""$EXE_NAME"" &
 
                 while (!token.IsCancellationRequested)
                 {
-                    if (config.AutoDeclineFriendRequests && isLoggedIn)
+                    if (!isLoggedIn)
+                    {
+                        Console.WriteLine("[AutoDecline] Waiting for login...");
+                        try { await Task.Delay(5000, token); } catch (OperationCanceledException) { break; }
+                        continue;
+                    }
+
+                    if (config.AutoDeclineFriendRequests)
                     {
                         try
                         {
@@ -2860,7 +2869,10 @@ cd ""$DEST_DIR"" && chmod +x ""$EXE_NAME"" && ./""$EXE_NAME"" &
                             {
                                 Console.WriteLine($"[AutoDecline] Processing {requests.Count} request(s)");
 
-                                var friendIds = new HashSet<string>(friends.Select(f => f.Id));
+                                // Refresh friends list so we are not working from stale data
+                                var freshFriends = await api.GetAllFriendsAsync();
+                                friends = freshFriends;
+                                var friendIds = new HashSet<string>(freshFriends.Select(f => f.Id));
 
                                 Dictionary<string, long>? timeMap = null;
                                 if (config.AutoDeclineOnlyFromStrangers && VrcxDataService.IsAvailable)
