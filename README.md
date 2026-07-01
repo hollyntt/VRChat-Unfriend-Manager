@@ -78,4 +78,4 @@
 
 ---
 
-[![License: WTFPL](https://img.shields.io/badge/License-WTFPL-brightgreen.svg)](http://www.wtfpl.net/)
+[![License: GNUv3](https://img.shields.io/badge/License-GNUV3-brightgreen.svg)](https://www.gnu.org/licenses/gpl-3.0.en.html)
