@@ -27,21 +27,14 @@ namespace VRCUFM
             get
             {
                 var assembly = Assembly.GetExecutingAssembly();
-
-                // Prefer InformationalVersion if it looks like semver (contains a dot)
-                var infoAttr = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
-                if (infoAttr != null && !string.IsNullOrEmpty(infoAttr.InformationalVersion))
+                var attr = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
+                if (attr != null && !string.IsNullOrEmpty(attr.InformationalVersion))
                 {
-                    // Strip any +build metadata (e.g. "1.2.0+abc1234" → "1.2.0")
-                    var v = infoAttr.InformationalVersion.Split('+')[0].TrimStart('v');
-                    if (v.Contains('.')) return v;
+                    // CI sets InformationalVersion to the 7-char commit hash.
+                    // Strip any +build metadata just in case.
+                    return attr.InformationalVersion.Split('+')[0].TrimStart('v');
                 }
-
-                // Fallback: AssemblyVersion
-                var ver = assembly.GetName().Version;
-                if (ver != null) return $"{ver.Major}.{ver.Minor}.{ver.Build}";
-
-                return "0.0.0";
+                return "unknown";
             }
         }
         
@@ -1650,9 +1643,10 @@ tray.run()
                 var root = doc.RootElement;
 
                 string tag = root.GetProperty("tag_name").GetString() ?? "";
-                latestVersion = tag.TrimStart('v');
+                latestVersion = tag.TrimStart('v').Trim();
+                Console.WriteLine($"[Updater] Local: '{AppVersion}' Latest: '{latestVersion}'");
 
-                if (latestVersion == AppVersion)
+                if (string.Equals(latestVersion, AppVersion, StringComparison.OrdinalIgnoreCase))
                 {
                     updateAvailable = false;
                     return;
