@@ -27,25 +27,21 @@ namespace VRCUFM
             get
             {
                 var assembly = Assembly.GetExecutingAssembly();
-                var attr = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
-                if (attr != null && !string.IsNullOrEmpty(attr.InformationalVersion))
+
+                // Prefer InformationalVersion if it looks like semver (contains a dot)
+                var infoAttr = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
+                if (infoAttr != null && !string.IsNullOrEmpty(infoAttr.InformationalVersion))
                 {
-                    string v = attr.InformationalVersion;
-                    return v.Length >= 7 ? v[..7] : v;
+                    // Strip any +build metadata (e.g. "1.2.0+abc1234" → "1.2.0")
+                    var v = infoAttr.InformationalVersion.Split('+')[0].TrimStart('v');
+                    if (v.Contains('.')) return v;
                 }
-                try
-                {
-                    using var p = Process.Start(new ProcessStartInfo("git", "rev-parse --short=7 HEAD")
-                    {
-                        RedirectStandardOutput = true,
-                        UseShellExecute = false,
-                        CreateNoWindow = true
-                    });
-                    string hash = p?.StandardOutput.ReadToEnd().Trim() ?? "";
-                    p?.WaitForExit(1000);
-                    return (hash.Length >= 7) ? hash : "unknown";
-                }
-                catch { return "unknown"; }
+
+                // Fallback: AssemblyVersion
+                var ver = assembly.GetName().Version;
+                if (ver != null) return $"{ver.Major}.{ver.Minor}.{ver.Build}";
+
+                return "0.0.0";
             }
         }
         
