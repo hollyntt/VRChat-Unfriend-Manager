@@ -14,5 +14,10 @@ public static class Paths
 
     public static string VrcxStartup => Path.Combine(VrcxBase, "startup");
 
+    public static string VrcNextBase => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VRCNext");
+
+    public static string VrcNextStartup => Path.Combine(VrcNextBase, "AutoStart");
+
     public static void EnsureExists() => Directory.CreateDirectory(AppDataFolder);
 }

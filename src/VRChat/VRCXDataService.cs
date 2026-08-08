@@ -3,56 +3,56 @@
 namespace VRCUFM.VRChat;
 
 public static class VRCXDataService
+{
+    private static string DbPath => Path.Combine(Paths.VrcxBase, "VRCX.sqlite3");
+    public static bool IsAvailable => File.Exists(DbPath);
+
+    public static Dictionary<string, long> LoadTimeSpentSeconds()
     {
-        private static string DbPath => Path.Combine(Paths.VrcxBase, "VRCX.sqlite3");
-        public static bool IsAvailable => File.Exists(DbPath);
+        var result = new Dictionary<string, long>();
+        if (!IsAvailable) return result;
 
-        public static Dictionary<string, long> LoadTimeSpentSeconds()
+        try
         {
-            var result = new Dictionary<string, long>();
-            if (!IsAvailable) return result;
+            using var connection = new Microsoft.Data.Sqlite.SqliteConnection(
+                $"Data Source={DbPath};Mode=ReadOnly;Cache=Shared");
+            connection.Open();
 
-            try
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = @"
+                SELECT user_id, created_at, type
+                FROM   gamelog_join_leave
+                WHERE  user_id IS NOT NULL AND user_id != ''
+                ORDER  BY user_id ASC, created_at ASC";
+
+            using var reader = cmd.ExecuteReader();
+            var pendingJoin = new Dictionary<string, DateTime>();
+
+            while (reader.Read())
             {
-                using var connection = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={DbPath};Mode=ReadOnly;Cache=Shared");
-                connection.Open();
+                var userId = reader.GetString(0);
+                if (!DateTime.TryParse(reader.GetString(1), out var ts)) continue;
+                var type = reader.GetString(2);
 
-                using var cmd = connection.CreateCommand();
-                cmd.CommandText = @"
-                    SELECT user_id, created_at, type
-                    FROM   gamelog_join_leave
-                    WHERE  user_id IS NOT NULL AND user_id != ''
-                    ORDER  BY user_id ASC, created_at ASC";
-
-                using var reader = cmd.ExecuteReader();
-
-                var pendingJoin = new Dictionary<string, DateTime>();
-
-                while (reader.Read())
+                if (type == "OnPlayerJoined")
+                    pendingJoin[userId] = ts;
+                else if (type == "OnPlayerLeft" && pendingJoin.TryGetValue(userId, out var joinTime))
                 {
-                    var userId = reader.GetString(0);
-                    if (!DateTime.TryParse(reader.GetString(1), out var ts)) continue;
-                    var type = reader.GetString(2);
-
-                    if (type == "OnPlayerJoined")
-                        pendingJoin[userId] = ts;
-                    else if (type == "OnPlayerLeft" && pendingJoin.TryGetValue(userId, out var joinTime))
+                    var secs = (long)(ts - joinTime).TotalSeconds;
+                    if (secs > 0)
                     {
-                        var secs = (long)(ts - joinTime).TotalSeconds;
-                        if (secs > 0)
-                        {
-                            result.TryGetValue(userId, out var existing);
-                            result[userId] = existing + secs;
-                        }
-                        pendingJoin.Remove(userId);
+                        result.TryGetValue(userId, out var existing);
+                        result[userId] = existing + secs;
                     }
+                    pendingJoin.Remove(userId);
                 }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[VRCX] DB read failed: {ex.Message}");
-            }
-
-            return result;
         }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[VRCX] DB read failed: {ex.Message}");
+        }
+
+        return result;
     }
+}

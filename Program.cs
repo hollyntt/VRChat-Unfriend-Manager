@@ -1410,6 +1410,32 @@ tray.run()
                 }
             }
 
+            if (Directory.Exists(Paths.VrcNextStartup))
+            {
+                ImGui.Spacing();
+                ImGui.Text("VRCNext Integration");
+                if (VRCNextDataService.IsAvailable)
+                    ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "✓ VRCNData.db found — time together data enabled");
+                else
+                    ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCNData.db not found — time together will show as '-'");
+
+                bool vrcNextDesktop = config.VrcNextStartupDesktop;
+                if (ImGui.Checkbox("Launch with VRCNext (Desktop)", ref vrcNextDesktop))
+                {
+                    config.VrcNextStartupDesktop = vrcNextDesktop;
+                    UpdateVrcxShortcut("Desktop", vrcNextDesktop, Paths.VrcNextStartup);
+                    SaveConfig();
+                }
+
+                bool vrcNextVr = config.VrcNextStartupVr;
+                if (ImGui.Checkbox("Launch with VRCNext (VR)", ref vrcNextVr))
+                {
+                    config.VrcNextStartupVr = vrcNextVr;
+                    UpdateVrcxShortcut("VR", vrcNextVr, Paths.VrcNextStartup);
+                    SaveConfig();
+                }
+            }
+
             ImGui.Spacing();
             ImGui.Separator();
             ImGui.Text("Updates");
@@ -2072,10 +2098,13 @@ cd ""$DEST_DIR"" && chmod +x ""$EXE_NAME"" && ./""$EXE_NAME"" &
                 favGroupNames = await api.GetFavoriteGroupNamesAsync();
                 friends = await api.GetAllFriendsAsync();
 
-                if (VRCXDataService.IsAvailable)
+                if (VRCNextDataService.IsAvailable || VRCXDataService.IsAvailable)
                 {
-                    status = "Loading VRCX time data...";
-                    var timeMap = await Task.Run(() => VRCXDataService.LoadTimeSpentSeconds());
+                    status = "Loading time together data...";
+                    var timeMap = await Task.Run(() =>
+                        VRCNextDataService.IsAvailable
+                            ? VRCNextDataService.LoadTimeSpentSeconds()
+                            : VRCXDataService.LoadTimeSpentSeconds());
                     foreach (var f in friends)
                         if (timeMap.TryGetValue(f.Id, out var secs))
                             f.TimeSpentMs = secs * 1000L;
@@ -2145,9 +2174,12 @@ cd ""$DEST_DIR"" && chmod +x ""$EXE_NAME"" && ./""$EXE_NAME"" &
                                 var friendIds = new HashSet<string>(freshFriends.Select(f => f.Id));
 
                                 Dictionary<string, long>? timeMap = null;
-                                if (config.AutoDeclineOnlyFromStrangers && VRCXDataService.IsAvailable)
+                                if (config.AutoDeclineOnlyFromStrangers && (VRCNextDataService.IsAvailable || VRCXDataService.IsAvailable))
                                 {
-                                    timeMap = await Task.Run(() => VRCXDataService.LoadTimeSpentSeconds());
+                                    timeMap = await Task.Run(() =>
+                                        VRCNextDataService.IsAvailable
+                                            ? VRCNextDataService.LoadTimeSpentSeconds()
+                                            : VRCXDataService.LoadTimeSpentSeconds());
                                 }
 
                                 int declined = 0;
@@ -2466,11 +2498,11 @@ cd ""$DEST_DIR"" && chmod +x ""$EXE_NAME"" && ./""$EXE_NAME"" &
             ((IPersistFile)link).Save(lnkPath, false);
         }
 
-        static void UpdateVrcxShortcut(string subfolder, bool enable)
+        static void UpdateVrcxShortcut(string subfolder, bool enable, string? startupBase = null)
         {
             try
             {
-                var targetDir = Path.Combine(Paths.VrcxStartup, subfolder);
+                var targetDir = Path.Combine(startupBase ?? Paths.VrcxStartup, subfolder);
                 Directory.CreateDirectory(targetDir);
                 var exePath = Process.GetCurrentProcess().MainModule?.FileName;
                 if (string.IsNullOrEmpty(exePath)) return;
