@@ -8,6 +8,11 @@ using VRCUFM.AppSystem;
 using VRCUFM.Filesystem;
 using File = System.IO.File;
 
+#if WINDOWS_BUILD
+using System.Drawing;
+using System.Windows.Forms;
+#endif
+
 namespace VRCUFM.Core;
 
 public static class PlatformService
@@ -18,7 +23,9 @@ public static class PlatformService
     public static bool ShowRequested = false;
     private static bool _trayRunning = false;
     private static Thread? _trayThread;
+#if WINDOWS_BUILD
     private static NotifyIcon? _notifyIcon;
+#endif
     private static readonly object _trayLock = new();
     private static Process? _linuxTrayProcess;
     private static System.Net.Sockets.Socket? _linuxTraySocket;
@@ -118,9 +125,15 @@ public static class PlatformService
             _trayThread = new Thread(() =>
             {
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                {
+#if WINDOWS_BUILD
                     RunWindowsTray(autostart);
+#endif
+                }
                 else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                {
                     RunLinuxTray(autostart);
+                }
                 _trayRunning = false;
             });
             _trayThread.IsBackground = true;
@@ -136,6 +149,7 @@ public static class PlatformService
         {
             _trayRunning = false;
 
+#if WINDOWS_BUILD
             if (_notifyIcon != null)
             {
                 try
@@ -146,6 +160,7 @@ public static class PlatformService
                 }
                 catch { }
             }
+#endif
 
             try { _linuxTrayProcess?.Kill(); } catch { }
             _linuxTrayProcess = null;
@@ -158,6 +173,7 @@ public static class PlatformService
         }
     }
 
+#if WINDOWS_BUILD
     static Icon LoadTrayIcon()
     {
         string exeDir = AppDomain.CurrentDomain.BaseDirectory;
@@ -225,6 +241,8 @@ public static class PlatformService
             Console.WriteLine($"[TRAY] RunWindowsTray failed: {ex.Message}");
         }
     }
+
+#endif
 
     static void RunLinuxTray(bool autostart)
     {
