@@ -21,7 +21,7 @@ public class SafeLimitedUserFriend
     public int UploadedAvatars { get; set; }
     public bool ProfileEnriched { get; set; }
 
-    /// <summary>0–100. -1 = not computed yet.</summary>
+    /// <summary>0-100 VRCNext trust. -1 = not computed yet.</summary>
     public int TrustScore { get; set; } = -1;
     public int TrustRankLevel { get; set; }
 }

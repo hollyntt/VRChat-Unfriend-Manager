@@ -357,8 +357,7 @@ public class APIService
             var page = await Friends.GetFriendsAsync(offset: offset, n: 100, offline: false);
             foreach (var u in page)
             {
-                if (seen.Add(u.Id))
-                    list.Add(MapFriend(u));
+                if (seen.Add(u.Id)) list.Add(MapFriend(u));
             }
             if (page.Count < 100) break;
         }
@@ -367,8 +366,7 @@ public class APIService
             var page = await Friends.GetFriendsAsync(offset: offset, n: 100, offline: true);
             foreach (var u in page)
             {
-                if (seen.Add(u.Id))
-                    list.Add(MapFriend(u));
+                if (seen.Add(u.Id)) list.Add(MapFriend(u));
             }
             if (page.Count < 100) break;
         }
@@ -389,55 +387,28 @@ public class APIService
         if (string.IsNullOrEmpty(userId)) return null;
         var http = GetAuthClient();
         var profile = new UserTrustProfile();
-
         try
         {
             var resp = await http.GetAsync("https://api.vrchat.cloud/api/1/users/" + userId);
             var body = await resp.Content.ReadAsStringAsync();
-            if (!resp.IsSuccessStatusCode)
-            {
-                Console.WriteLine("[TrustScore] " + userId + " " + resp.StatusCode);
-                return null;
-            }
-
+            if (!resp.IsSuccessStatusCode) return null;
             using var doc = JsonDocument.Parse(body);
             var root = doc.RootElement;
-
-            if (root.TryGetProperty("date_joined", out var dj))
-                profile.DateJoined = dj.GetString() ?? "";
-            else if (root.TryGetProperty("dateJoined", out var dj2))
-                profile.DateJoined = dj2.GetString() ?? "";
-
-            if (root.TryGetProperty("bio", out var bio))
-                profile.Bio = bio.GetString() ?? "";
-
+            if (root.TryGetProperty("date_joined", out var dj)) profile.DateJoined = dj.GetString() ?? "";
+            else if (root.TryGetProperty("dateJoined", out var dj2)) profile.DateJoined = dj2.GetString() ?? "";
+            if (root.TryGetProperty("bio", out var bio)) profile.Bio = bio.GetString() ?? "";
             if (root.TryGetProperty("tags", out var tags) && tags.ValueKind == JsonValueKind.Array)
-            {
                 foreach (var tag in tags.EnumerateArray())
-                {
-                    var s = tag.GetString();
-                    if (!string.IsNullOrEmpty(s)) profile.Tags.Add(s!);
-                }
-            }
+                { var s = tag.GetString(); if (!string.IsNullOrEmpty(s)) profile.Tags.Add(s!); }
             profile.IsVrcPlus = profile.Tags.Contains("system_supporter");
-
-            if (root.TryGetProperty("ageVerified", out var av) && av.ValueKind == JsonValueKind.True)
-                profile.AgeVerified = true;
+            if (root.TryGetProperty("ageVerified", out var av) && av.ValueKind == JsonValueKind.True) profile.AgeVerified = true;
             if (root.TryGetProperty("ageVerificationStatus", out var avs) &&
-                string.Equals(avs.GetString(), "18+", StringComparison.OrdinalIgnoreCase))
-                profile.AgeVerified = true;
-
-            if (root.TryGetProperty("isEconomyCreator", out var ec) && ec.ValueKind == JsonValueKind.True)
-                profile.IsEconomyCreator = true;
-
+                string.Equals(avs.GetString(), "18+", StringComparison.OrdinalIgnoreCase)) profile.AgeVerified = true;
+            if (root.TryGetProperty("isEconomyCreator", out var ec) && ec.ValueKind == JsonValueKind.True) profile.IsEconomyCreator = true;
             if (root.TryGetProperty("badges", out var badges) && badges.ValueKind == JsonValueKind.Array)
                 profile.BadgeCount = badges.GetArrayLength();
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine("[TrustScore] " + ex.Message);
-            return null;
-        }
+        catch { return null; }
 
         try
         {
@@ -449,22 +420,15 @@ public class APIService
                 {
                     profile.GroupCount = gDoc.RootElement.GetArrayLength();
                     foreach (var g in gDoc.RootElement.EnumerateArray())
-                    {
                         if (g.TryGetProperty("isRepresenting", out var ir) && ir.ValueKind == JsonValueKind.True)
-                        {
-                            profile.IsRepresentingGroup = true;
-                            break;
-                        }
-                    }
+                        { profile.IsRepresentingGroup = true; break; }
                 }
             }
         }
         catch { }
-
         try
         {
-            var wResp = await http.GetAsync(
-                "https://api.vrchat.cloud/api/1/worlds?userId=" + Uri.EscapeDataString(userId) + "&n=1&sort=created&order=descending");
+            var wResp = await http.GetAsync("https://api.vrchat.cloud/api/1/worlds?userId=" + Uri.EscapeDataString(userId) + "&n=1&sort=created&order=descending");
             if (wResp.IsSuccessStatusCode)
             {
                 using var wDoc = JsonDocument.Parse(await wResp.Content.ReadAsStringAsync());
@@ -473,11 +437,9 @@ public class APIService
             }
         }
         catch { }
-
         try
         {
-            var aResp = await http.GetAsync(
-                "https://api.vrchat.cloud/api/1/avatars?userId=" + Uri.EscapeDataString(userId) + "&n=1&releaseStatus=public");
+            var aResp = await http.GetAsync("https://api.vrchat.cloud/api/1/avatars?userId=" + Uri.EscapeDataString(userId) + "&n=1&releaseStatus=public");
             if (aResp.IsSuccessStatusCode)
             {
                 using var aDoc = JsonDocument.Parse(await aResp.Content.ReadAsStringAsync());
@@ -486,7 +448,6 @@ public class APIService
             }
         }
         catch { }
-
         return profile;
     }
 

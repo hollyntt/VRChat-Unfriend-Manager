@@ -15,7 +15,7 @@ public static class UIRenderer
 {
     static readonly string[] togetherUnits = { "min", "hr", "days" };
     static readonly string[] searchFields = { "Name", "Group" };
-    static readonly string[] sorts = { "Oldest", "Newest", "A-Z", "Z-A", "Most Time", "Least Time", "Lowest Trust", "Highest Trust" };
+    static readonly string[] sorts = { "Oldest", "Newest", "A-Z", "Z-A", "Most Time", "Least Time", "Lowest Score", "Highest Score" };
     static readonly string[] autoModes = { "Inactive Only (3+ mo)", "All Shown", "Marked Only" };
 
     static string _noteBuffer = "";
@@ -338,15 +338,7 @@ public static class UIRenderer
 
         ImGui.Separator();
         ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.7f, 1f), Program.status);
-        if (TrustScoreService.IsEnriching)
-        {
-            ImGui.SameLine();
-            int done = TrustScoreService.EnrichDone;
-            int total = Math.Max(1, TrustScoreService.EnrichTotal);
-            ImGui.TextColored(new Vector4(0.55f, 0.45f, 0.9f, 1f), $"  ·  Trust {done}/{total}");
-            ImGui.ProgressBar(done / (float)total, new Vector2(-1, 4), "");
-        }
-        else if (Program.working && !Program.isUnfriending)
+        if (Program.working && !Program.isUnfriending)
             ImGui.ProgressBar(-1f * (float)(ImGui.GetTime() % 1.0), new Vector2(-1, 6), "");
 
         var excludedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -405,8 +397,8 @@ public static class UIRenderer
             3 => temp.OrderByDescending(f => f.DisplayName).ToList(),
             4 => temp.OrderByDescending(f => f.TimeSpentMs).ToList(),
             5 => temp.OrderBy(f => f.TimeSpentMs).ToList(),
-            6 => temp.OrderBy(f => TrustScoreService.Calculate(f)).ToList(),
-            7 => temp.OrderByDescending(f => TrustScoreService.Calculate(f)).ToList(),
+            6 => temp.OrderBy(f => FriendsManager.CalculateFriendScore(f, Program.favorites)).ToList(),
+            7 => temp.OrderByDescending(f => FriendsManager.CalculateFriendScore(f, Program.favorites)).ToList(),
             _ => temp.OrderBy(f => f.DisplayName).ToList()
         };
         Program.shown = temp;
@@ -417,7 +409,7 @@ public static class UIRenderer
 
         if (ImGui.BeginChild("##list", new Vector2(-1, listH), ImGuiChildFlags.Borders))
         {
-            ImGui.TextDisabled($"{"  ",-5}{"Name",-30} {"Trust",-6} {"Last seen",-8}  {"Together",-9}  Group");
+            ImGui.TextDisabled($"{"  ",-5}{"Name",-30} {"Score",-6} {"Last seen",-8}  {"Together",-9}  Group");
             ImGui.Separator();
 
             const float IMG_SIZE = 32f;
@@ -429,12 +421,10 @@ public static class UIRenderer
                 var ago = string.IsNullOrEmpty(f.LastLogin) ? "never" : Program.Ago(DateTime.Parse(f.LastLogin));
                 var together = Program.FormatTimeSpent(f.TimeSpentMs);
                 bool sel = Program.selected.Contains(i);
-                int score = TrustScoreService.Calculate(f);
-                var scoreCol = score >= 80 ? new Vector4(0.35f, 0.95f, 0.45f, 1f) :
-                               score >= 60 ? new Vector4(0.40f, 0.85f, 0.95f, 1f) :
-                               score >= 40 ? new Vector4(0.9f, 0.7f, 0.1f, 1f) :
-                               score >= 20 ? new Vector4(1f, 0.55f, 0.25f, 1f) :
-                               new Vector4(1f, 0.3f, 0.3f, 1f);
+                int score = FriendsManager.CalculateFriendScore(f, Program.favorites);
+                var scoreCol = score < 20 ? new Vector4(1f, 0.3f, 0.3f, 1f) :
+                               score < 50 ? new Vector4(0.9f, 0.7f, 0.1f, 1f) :
+                               new Vector4(0.4f, 0.9f, 0.5f, 1f);
 
                 string groupLabel = "";
                 foreach (var (tag, ids) in Program.favByGroup.OrderBy(kv => kv.Key))
@@ -538,7 +528,7 @@ public static class UIRenderer
                 FriendsManager.SelectAllLowTime(Program.shown, Program.selected, tThreshMs);
             if (ImGui.MenuItem("Select Non-Favorites"))
                 FriendsManager.SelectNonFavorites(Program.shown, Program.selected, Program.favorites);
-            if (ImGui.MenuItem("Select Low Trust (≤25)"))
+            if (ImGui.MenuItem("Select Low Score (≤25)"))
                 FriendsManager.SelectLowScore(Program.shown, Program.selected, Program.favorites, 25);
             if (ImGui.MenuItem("Invert Selection"))
                 FriendsManager.InvertSelection(Program.shown, Program.selected);
