@@ -64,6 +64,122 @@ public static class UIRenderer
         colors[(int)ImGuiCol.TextDisabled] = new Vector4(0.50f, 0.48f, 0.55f, 1f);
     }
 
+    public static void DrawSetupScreen()
+    {
+        int sw = Raylib.GetScreenWidth();
+        int sh = Raylib.GetScreenHeight();
+        float formW = Math.Min(480f, sw * 0.9f);
+        float formH = 360f;
+        float ox = (sw - formW) * 0.5f;
+        float oy = (sh - formH) * 0.5f;
+
+        ImGui.SetCursorPos(new Vector2(ox, oy));
+        ImGui.BeginChild("##setup_card", new Vector2(formW, formH), ImGuiChildFlags.Borders);
+
+        ImGui.Spacing();
+        ImGui.Text("Install required");
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        string cur = InstallService.GetCurrentAppDir();
+        ImGui.TextWrapped(
+            "This build is not running from your install folder. " +
+            "Install to a user folder so updates can replace files without Admin.");
+        ImGui.Spacing();
+        ImGui.TextDisabled("Currently running from:");
+        ImGui.TextWrapped(cur);
+        ImGui.Spacing();
+
+        if (InstallService.IsUnderProgramFiles(cur))
+        {
+            ImGui.TextColored(new Vector4(1f, 0.55f, 0.25f, 1f),
+                "Program Files is not supported for auto-updates.");
+            ImGui.Spacing();
+        }
+
+        ImGui.Text("Install location");
+        string path = Program.setupInstallPath ?? "";
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputText("##install_path", ref path, 512))
+            Program.setupInstallPath = path;
+
+        if (ImGui.Button("Browse..."))
+        {
+            try
+            {
+                using var dlg = new FolderBrowserDialog
+                {
+                    Description = "Choose VRCUFM install folder",
+                    UseDescriptionForTitle = true,
+                    SelectedPath = Directory.Exists(Program.setupInstallPath)
+                        ? Program.setupInstallPath
+                        : Paths.DefaultInstallDir
+                };
+                if (dlg.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(dlg.SelectedPath))
+                    Program.setupInstallPath = dlg.SelectedPath;
+            }
+            catch (Exception ex)
+            {
+                Program.status = "Folder dialog failed: " + ex.Message;
+            }
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Use recommended"))
+            Program.setupInstallPath = Paths.DefaultInstallDir;
+
+        ImGui.Spacing();
+        bool startMenu = Program.config.StartMenuShortcut;
+        if (ImGui.Checkbox("Create Start Menu shortcut", ref startMenu))
+            Program.config.StartMenuShortcut = startMenu;
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        float btnW = (formW - 48f) * 0.5f;
+        if (ImGui.Button("Install here", new Vector2(btnW, 36)))
+        {
+            try
+            {
+                Program.status = "Installing...";
+                InstallService.InstallAndRelaunch(
+                    Program.setupInstallPath,
+                    Program.config,
+                    Program.config.StartMenuShortcut,
+                    Program.SaveConfig);
+                // If no relaunch (already in place), clear setup flag
+                Program.needsSetup = InstallService.NeedsSetup(Program.config);
+                Program.status = "Install complete";
+            }
+            catch (Exception ex)
+            {
+                Program.status = "Install failed: " + ex.Message;
+                MessageBox.Show(ex.Message, "Install failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Run portable", new Vector2(btnW, 36)))
+        {
+            try
+            {
+                InstallService.MarkPortable(Program.config, Program.SaveConfig);
+                Program.needsSetup = false;
+                Program.status = "Running portable from " + cur;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "Portable mode", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        ImGui.Spacing();
+        ImGui.TextDisabled("Recommended: " + Paths.DefaultInstallDir);
+        if (!string.IsNullOrEmpty(Program.status))
+            ImGui.TextColored(new Vector4(0.7f, 0.6f, 0.9f, 1f), Program.status);
+
+        ImGui.EndChild();
+    }
+
     public static void DrawLoginScreen()
     {
         int sw = Raylib.GetScreenWidth();

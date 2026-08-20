@@ -47,6 +47,7 @@ public class AppConfig
 
     public bool StartMenuShortcut { get; set; }
     public bool ShowStatsPanel { get; set; } = true;
+
     public bool SetupCompleted { get; set; } = false;
     public string InstallPath { get; set; } = "";
     public bool PortableMode { get; set; } = false;

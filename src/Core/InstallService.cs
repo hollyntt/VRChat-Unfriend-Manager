@@ -6,11 +6,17 @@ using File = System.IO.File;
 
 namespace VRCUFM.Core;
 
+/// <summary>
+/// After login: if not running from the configured install folder, force setup.
+/// Install copies the app to a user-writable path so updates work without UAC.
+/// </summary>
 public static class InstallService
 {
     public static string GetCurrentAppDir()
     {
-        string exe = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName ?? "";
+        string exe = Environment.ProcessPath
+            ?? Process.GetCurrentProcess().MainModule?.FileName
+            ?? "";
         if (string.IsNullOrEmpty(exe))
             return AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         return Path.GetDirectoryName(exe) ?? AppContext.BaseDirectory;
@@ -47,17 +53,51 @@ public static class InstallService
         catch { return false; }
     }
 
+    static bool SamePath(string a, string b)
+    {
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(a).TrimEnd('\\', '/'),
+                Path.GetFullPath(b).TrimEnd('\\', '/'),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// True when the running binary is not in the required install location.
+    /// Checked after login so the user can still sign in from a loose build.
+    /// </summary>
     public static bool NeedsSetup(AppConfig config)
     {
-        if (config.SetupCompleted) return false;
-        if (!string.IsNullOrEmpty(config.Username) || config.RememberMe || File.Exists(Paths.CookieFile))
+        string current = GetCurrentAppDir();
+
+        // Portable explicitly allowed and still in that folder
+        if (config.PortableMode && config.SetupCompleted)
         {
-            config.SetupCompleted = true;
-            config.PortableMode = true;
-            config.InstallPath = GetCurrentAppDir();
-            return false;
+            if (!string.IsNullOrWhiteSpace(config.InstallPath) && SamePath(current, config.InstallPath))
+                return false;
+            // Portable marked but path drifted (moved folder) → setup again
+            if (string.IsNullOrWhiteSpace(config.InstallPath))
+            {
+                config.InstallPath = current;
+                return false;
+            }
+            return !SamePath(current, config.InstallPath);
         }
-        return true;
+
+        // Proper install: must run from InstallPath
+        if (config.SetupCompleted && !string.IsNullOrWhiteSpace(config.InstallPath))
+            return !SamePath(current, config.InstallPath);
+
+        // Never finished setup, or InstallPath missing
+        // Program Files is never a valid permanent home
+        if (IsUnderProgramFiles(current))
+            return true;
+
+        // First run / incomplete setup
+        return !config.SetupCompleted;
     }
 
     public static void CopyAppFiles(string sourceDir, string targetDir)
@@ -78,18 +118,13 @@ public static class InstallService
         if (string.IsNullOrWhiteSpace(targetDir))
             throw new InvalidOperationException("Install path is empty.");
         if (!CanWriteToDirectory(targetDir))
-            throw new InvalidOperationException("Cannot write to:\n" + targetDir + "\n\nChoose a folder under your user profile.");
+            throw new InvalidOperationException(
+                "Cannot write to:\n" + targetDir + "\n\nChoose a folder under your user profile (e.g. Local AppData).");
 
         string sourceDir = GetCurrentAppDir();
-        if (string.Equals(Path.GetFullPath(sourceDir), targetDir, StringComparison.OrdinalIgnoreCase))
-        {
-            config.SetupCompleted = true; config.PortableMode = false; config.InstallPath = targetDir;
-            config.StartMenuShortcut = createStartMenu; saveConfig();
-            if (createStartMenu) PlatformService.UpdateStartMenuShortcut(true, GetCurrentExePath());
-            return;
-        }
+        if (!SamePath(sourceDir, targetDir))
+            CopyAppFiles(sourceDir, targetDir);
 
-        CopyAppFiles(sourceDir, targetDir);
         string exeName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "VRCUFM.exe" : "VRCUFM";
         string newExe = Path.Combine(targetDir, exeName);
         if (!File.Exists(newExe))
@@ -99,19 +134,38 @@ public static class InstallService
             else throw new InvalidOperationException("Install copy is missing the executable.");
         }
 
-        config.SetupCompleted = true; config.PortableMode = false; config.InstallPath = targetDir;
-        config.StartMenuShortcut = createStartMenu; saveConfig();
-        if (createStartMenu) PlatformService.UpdateStartMenuShortcut(true, newExe);
+        config.SetupCompleted = true;
+        config.PortableMode = false;
+        config.InstallPath = targetDir;
+        config.StartMenuShortcut = createStartMenu;
+        saveConfig();
 
-        Process.Start(new ProcessStartInfo { FileName = newExe, WorkingDirectory = targetDir, UseShellExecute = true });
+        if (createStartMenu)
+            PlatformService.UpdateStartMenuShortcut(true, newExe);
+
+        // Already running from target — no relaunch needed
+        if (SamePath(sourceDir, targetDir))
+            return;
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = newExe,
+            WorkingDirectory = targetDir,
+            UseShellExecute = true
+        });
         Environment.Exit(0);
     }
 
     public static void MarkPortable(AppConfig config, Action saveConfig)
     {
+        string current = GetCurrentAppDir();
+        if (IsUnderProgramFiles(current))
+            throw new InvalidOperationException(
+                "Cannot use portable mode from Program Files. Install to a user folder instead.");
+
         config.SetupCompleted = true;
         config.PortableMode = true;
-        config.InstallPath = GetCurrentAppDir();
+        config.InstallPath = current;
         saveConfig();
     }
 }
