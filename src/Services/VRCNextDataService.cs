@@ -1,4 +1,4 @@
-﻿using VRCUFM.Filesystem;
+using VRCUFM.Filesystem;
 
 namespace VRCUFM.VRChat;
 
@@ -7,13 +7,9 @@ public static class VRCNextDataService
     private static string DbPath => Path.Combine(Paths.VrcNextBase, "VRCNData.db");
     public static bool IsAvailable => File.Exists(DbPath);
 
-    /// <summary>
-    /// Returns a map of user_id → total seconds spent together,
-    /// read directly from VRCNext's pre-aggregated user_tracking table.
-    /// </summary>
     public static Dictionary<string, long> LoadTimeSpentSeconds()
     {
-        var result = new Dictionary<string, long>();
+        var result = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         if (!IsAvailable) return result;
 
         try

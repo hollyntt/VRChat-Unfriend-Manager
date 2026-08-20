@@ -1,4 +1,4 @@
-﻿namespace VRCUFM.AppSystem;
+namespace VRCUFM.AppSystem;
 
 public class AppConfig
 {
@@ -35,24 +35,16 @@ public class AppConfig
     public bool AutoSendRequestBack { get; set; } = false;
     public bool AutoDeclineOnlyFromStrangers { get; set; } = true;
 
-    // ── Friend-limit trigger ────────────────────────────────────────────────
-    /// <summary>
-    /// When true, RunAutoUnfriendAsync fires immediately if the friend count
-    /// reaches or exceeds FriendLimitThreshold, regardless of the schedule.
-    /// </summary>
     public bool FriendLimitTriggerEnabled { get; set; } = false;
-
-    /// <summary>
-    /// The friend count at which the limit trigger fires.
-    /// VRChat's hard cap is 1000; default here is 975 (25 slots as buffer).
-    /// </summary>
     public int FriendLimitThreshold { get; set; } = 975;
-
-    /// <summary>
-    /// How often (in minutes) the limit watcher polls the friend count.
-    /// Min 1, max 60. Default 2.
-    /// </summary>
     public int FriendLimitPollIntervalMinutes { get; set; } = 2;
 
+    /// <summary>
+    /// Minimum minutes spent together before someone counts as "known"
+    /// for stranger-declination purposes.
+    /// </summary>
+    public int MinTimeTogetherMinutes { get; set; } = 5;
+
     public bool StartMenuShortcut { get; set; }
+    public bool ShowStatsPanel { get; set; } = true;
 }

@@ -1,4 +1,4 @@
-﻿using VRCUFM.Filesystem;
+using VRCUFM.Filesystem;
 
 namespace VRCUFM.VRChat;
 
@@ -9,7 +9,7 @@ public static class VRCXDataService
 
     public static Dictionary<string, long> LoadTimeSpentSeconds()
     {
-        var result = new Dictionary<string, long>();
+        var result = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
         if (!IsAvailable) return result;
 
         try
@@ -26,7 +26,7 @@ public static class VRCXDataService
                 ORDER  BY user_id ASC, created_at ASC";
 
             using var reader = cmd.ExecuteReader();
-            var pendingJoin = new Dictionary<string, DateTime>();
+            var pendingJoin = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
 
             while (reader.Read())
             {
