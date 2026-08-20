@@ -14,7 +14,7 @@
 
         <!-- Version info -->
         <Version>1.0.0</Version>
-        <AssemblyVersion>4.0.0.0</AssemblyVersion>
+        <AssemblyVersion>1.0.0.0</AssemblyVersion>
         <FileVersion>1.0.0.0</FileVersion>
         <Product>VRChat Unfriend Manager</Product>
         <Description>Manage and unfriend VRChat friends</Description>

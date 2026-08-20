@@ -347,14 +347,14 @@ public static class UIRenderer
         {
             var stats = FriendsManager.CalculateStats(Program.friends, Program.favorites, Program.favByGroup);
             ImGui.PushStyleColor(ImGuiCol.ChildBg, new Vector4(0.08f, 0.08f, 0.14f, 1f));
-            if (ImGui.BeginChild("##stats", new Vector2(-1, 70), ImGuiChildFlags.Borders))
-            {
+                        ImGui.BeginChild("##stats", new Vector2(-1, 70), ImGuiChildFlags.Borders);
+
                 ImGui.TextColored(new Vector4(0.75f, 0.55f, 1f, 1f), "Friend Stats");
                 ImGui.SameLine();
                 ImGui.TextDisabled($"  Total: {stats.TotalFriends}  |  Online: {stats.OnlineFriends}  |  Inactive: {stats.InactiveFriends}  |  Ghosts: {stats.GhostFriends}  |  Favorites: {stats.FavoritesCount}");
                 ImGui.TextDisabled($"Avg time together: {Program.FormatTimeSpent((long)stats.AverageTimeTogetherMs)}  |  Total: {Program.FormatTimeSpent(stats.TotalTimeTogetherMs)}");
-                ImGui.EndChild();
-            }
+
+            ImGui.EndChild();
             ImGui.PopStyleColor();
             ImGui.Spacing();
         }
@@ -523,8 +523,8 @@ public static class UIRenderer
         float listH = sh - ImGui.GetCursorPosY() - bottomBarH - ImGui.GetStyle().WindowPadding.Y * 2 - 60;
         if (listH < 80) listH = 80;
 
-        if (ImGui.BeginChild("##list", new Vector2(-1, listH), ImGuiChildFlags.Borders))
-        {
+                ImGui.BeginChild("##list", new Vector2(-1, listH), ImGuiChildFlags.Borders);
+
             ImGui.TextDisabled($"{"  ",-5}{"Name",-30} {"Score",-6} {"Last seen",-8}  {"Together",-9}  Group");
             ImGui.Separator();
 
@@ -583,8 +583,8 @@ public static class UIRenderer
 
                 ImGui.PopID();
             }
+
             ImGui.EndChild();
-        }
 
         // -- Notes editor (when exactly 1 selected) ---------------------------
         if (Program.selected.Count == 1)
@@ -717,8 +717,8 @@ public static class UIRenderer
             }
 
             float cardH = Math.Min(ids.Count * (ImGui.GetTextLineHeightWithSpacing() + 6) + 12, sh * 0.5f);
-            if (ImGui.BeginChild($"##grp_{tag}", new Vector2(colW, cardH), ImGuiChildFlags.Borders))
-            {
+                        ImGui.BeginChild($"##grp_{tag}", new Vector2(colW, cardH), ImGuiChildFlags.Borders);
+
                 foreach (var id in ids)
                 {
                     var f = Program.friends.FirstOrDefault(x => x.Id == id);
@@ -739,8 +739,8 @@ public static class UIRenderer
                         ImGui.TextDisabled(id);
                     }
                 }
-                ImGui.EndChild();
-            }
+
+            ImGui.EndChild();
 
             ImGui.EndGroup();
             ImGui.SameLine(0, 12);
@@ -805,8 +805,8 @@ public static class UIRenderer
         ImGui.Spacing();
 
         float listH = sh - ImGui.GetCursorPosY() - 40;
-        if (ImGui.BeginChild("##reqlist", new Vector2(-1, listH), ImGuiChildFlags.Borders))
-        {
+                ImGui.BeginChild("##reqlist", new Vector2(-1, listH), ImGuiChildFlags.Borders);
+
             if (Program.incomingFriendRequests.Count == 0)
             {
                 ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1f), "No incoming friend requests.");
@@ -862,8 +862,8 @@ public static class UIRenderer
                     ImGui.PopID();
                 }
             }
+
             ImGui.EndChild();
-        }
     }
 
     public static void DrawAutoUnfriendConfirmDialog()
@@ -1294,18 +1294,17 @@ public static class UIRenderer
         if (log.Count > 0)
         {
             float histH = Math.Min(log.Count * 22 + 20, 200);
-            if (ImGui.BeginChild("##unfriend_hist", new Vector2(-1, histH), ImGuiChildFlags.Borders))
+            // Always pair BeginChild/EndChild (ImGui asserts if EndChild is skipped when Begin returns false).
+            ImGui.BeginChild("##unfriend_hist", new Vector2(-1, histH), ImGuiChildFlags.Borders);
+            ImGui.TextDisabled($"{"Name",-28} {"Date",-14} {"Reason",-10} {"Time Before",-12}");
+            ImGui.Separator();
+            foreach (var entry in log.OrderByDescending(e => e.UnfriendedAt).Take(50))
             {
-                ImGui.TextDisabled($"{"Name",-28} {"Date",-14} {"Reason",-10} {"Time Before",-12}");
-                ImGui.Separator();
-                foreach (var entry in log.OrderByDescending(e => e.UnfriendedAt).Take(50))
-                {
-                    var dt = entry.UnfriendedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
-                    var time = Program.FormatTimeSpent(entry.TimeSpentMsBefore);
-                    ImGui.Text($"{entry.DisplayName,-28} {dt,-14} {entry.Reason,-10} {time,-12}");
-                }
-                ImGui.EndChild();
+                var dt = entry.UnfriendedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+                var time = Program.FormatTimeSpent(entry.TimeSpentMsBefore);
+                ImGui.Text($"{entry.DisplayName,-28} {dt,-14} {entry.Reason,-10} {time,-12}");
             }
+            ImGui.EndChild();
         }
     }
 }
