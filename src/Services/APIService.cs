@@ -375,19 +375,15 @@ public class APIService
         return list;
     }
 
-    private static SafeLimitedUserFriend MapFriend(LimitedUserFriend u)
+    private static SafeLimitedUserFriend MapFriend(LimitedUserFriend u) => new()
     {
-        return new SafeLimitedUserFriend
-        {
-            Id = u.Id,
-            DisplayName = u.DisplayName ?? "Unknown",
-            LastLogin = u.LastLogin?.ToString("o") ?? "",
-            ThumbnailUrl = u.CurrentAvatarThumbnailImageUrl ?? u.CurrentAvatarImageUrl ?? u.ProfilePicOverrideThumbnail ?? u.ProfilePicOverride ?? "",
-            Bio = u.Bio ?? "",
-        };
-    }
+        Id = u.Id,
+        DisplayName = u.DisplayName ?? "Unknown",
+        LastLogin = u.LastLogin?.ToString("o") ?? "",
+        ThumbnailUrl = u.CurrentAvatarThumbnailImageUrl ?? u.CurrentAvatarImageUrl ?? u.ProfilePicOverrideThumbnail ?? u.ProfilePicOverride ?? "",
+        Bio = u.Bio ?? "",
+    };
 
-    /// <summary>Full user fields needed for VRCNext Trusted Score.</summary>
     public async Task<UserTrustProfile?> FetchUserTrustProfileAsync(string userId)
     {
         if (string.IsNullOrEmpty(userId)) return null;
@@ -400,7 +396,7 @@ public class APIService
             var body = await resp.Content.ReadAsStringAsync();
             if (!resp.IsSuccessStatusCode)
             {
-                Console.WriteLine("[TrustScore] user " + userId + ": " + resp.StatusCode);
+                Console.WriteLine("[TrustScore] " + userId + " " + resp.StatusCode);
                 return null;
             }
 
@@ -423,7 +419,6 @@ public class APIService
                     if (!string.IsNullOrEmpty(s)) profile.Tags.Add(s!);
                 }
             }
-
             profile.IsVrcPlus = profile.Tags.Contains("system_supporter");
 
             if (root.TryGetProperty("ageVerified", out var av) && av.ValueKind == JsonValueKind.True)
@@ -440,18 +435,16 @@ public class APIService
         }
         catch (Exception ex)
         {
-            Console.WriteLine("[TrustScore] profile fetch failed: " + ex.Message);
+            Console.WriteLine("[TrustScore] " + ex.Message);
             return null;
         }
 
-        // Groups (best-effort)
         try
         {
             var gResp = await http.GetAsync("https://api.vrchat.cloud/api/1/users/" + userId + "/groups?n=50");
             if (gResp.IsSuccessStatusCode)
             {
-                var gBody = await gResp.Content.ReadAsStringAsync();
-                using var gDoc = JsonDocument.Parse(gBody);
+                using var gDoc = JsonDocument.Parse(await gResp.Content.ReadAsStringAsync());
                 if (gDoc.RootElement.ValueKind == JsonValueKind.Array)
                 {
                     profile.GroupCount = gDoc.RootElement.GetArrayLength();
@@ -468,15 +461,13 @@ public class APIService
         }
         catch { }
 
-        // Content presence (best-effort, n=1 is enough for the boolean criterion)
         try
         {
             var wResp = await http.GetAsync(
                 "https://api.vrchat.cloud/api/1/worlds?userId=" + Uri.EscapeDataString(userId) + "&n=1&sort=created&order=descending");
             if (wResp.IsSuccessStatusCode)
             {
-                var wBody = await wResp.Content.ReadAsStringAsync();
-                using var wDoc = JsonDocument.Parse(wBody);
+                using var wDoc = JsonDocument.Parse(await wResp.Content.ReadAsStringAsync());
                 if (wDoc.RootElement.ValueKind == JsonValueKind.Array && wDoc.RootElement.GetArrayLength() > 0)
                     profile.UploadedWorlds = 1;
             }
@@ -489,8 +480,7 @@ public class APIService
                 "https://api.vrchat.cloud/api/1/avatars?userId=" + Uri.EscapeDataString(userId) + "&n=1&releaseStatus=public");
             if (aResp.IsSuccessStatusCode)
             {
-                var aBody = await aResp.Content.ReadAsStringAsync();
-                using var aDoc = JsonDocument.Parse(aBody);
+                using var aDoc = JsonDocument.Parse(await aResp.Content.ReadAsStringAsync());
                 if (aDoc.RootElement.ValueKind == JsonValueKind.Array && aDoc.RootElement.GetArrayLength() > 0)
                     profile.UploadedAvatars = 1;
             }

@@ -9,7 +9,6 @@ public class SafeLimitedUserFriend
     public string ThumbnailUrl { get; set; } = "";
     public string Bio { get; set; } = "";
 
-    // VRCNext Trusted Score profile (filled by enrichment)
     public string DateJoined { get; set; } = "";
     public List<string> Tags { get; set; } = new();
     public int BadgeCount { get; set; }
@@ -22,7 +21,7 @@ public class SafeLimitedUserFriend
     public int UploadedAvatars { get; set; }
     public bool ProfileEnriched { get; set; }
 
-    /// <summary>0–100 VRCNext-style trust. -1 = not computed yet.</summary>
+    /// <summary>0–100. -1 = not computed yet.</summary>
     public int TrustScore { get; set; } = -1;
     public int TrustRankLevel { get; set; }
 }

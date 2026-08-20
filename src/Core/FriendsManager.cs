@@ -155,7 +155,6 @@ public static class FriendsManager
 
     // ── Scoring & Stats ──────────────────────────────────────────────────
 
-    /// <summary>VRCNext Trusted Score (0–100). Requires profile enrichment for full accuracy.</summary>
     public static int CalculateFriendScore(SafeLimitedUserFriend friend, HashSet<string> favorites)
         => TrustScoreService.Calculate(friend);
 

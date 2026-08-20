@@ -254,6 +254,7 @@ namespace VRCUFM
             autoCts?.Cancel();
             autoDeclineCts?.Cancel();
             unfriendCts?.Cancel();
+            TrustScoreService.CancelEnrichment();
 
             SaveConfig();
             TextureCache.UnloadAll();
@@ -346,6 +347,9 @@ namespace VRCUFM
                 }
 
                 await RefreshFriendRequests();
+
+                status = $"Scoring trust for {friends.Count} friends...";
+                TrustScoreService.StartEnrichment(friends, api);
 
                 status = $"Loaded {friends.Count} friends";
             }
@@ -451,7 +455,7 @@ namespace VRCUFM
                         try
                         {
                             var hr = await client.GetAsync(url);
-                            expectedHash = ExtractSha256Token(await hr.Content.ReadAsStringAsync());
+                            expectedHash = (await hr.Content.ReadAsStringAsync()).Trim();
                         }
                         catch { }
                     }
@@ -495,12 +499,11 @@ namespace VRCUFM
                     using var sha = SHA256.Create();
                     byte[] hash = await sha.ComputeHashAsync(fs);
                     string actual = BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
-                    string expected = ExtractSha256Token(expectedHash);
-                    if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                    if (!string.Equals(actual, expectedHash, StringComparison.OrdinalIgnoreCase))
                     {
                         fs.Close();
                         File.Delete(tempZip);
-                        MessageBox.Show($"Hash mismatch.\nExpected: {expected}\nGot: {actual}",
+                        MessageBox.Show($"Hash mismatch.\nExpected: {expectedHash}\nGot: {actual}",
                             "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                         return;
                     }
@@ -514,8 +517,8 @@ namespace VRCUFM
 
                 bool isWin = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
                 string[] exeNames = isWin
-                    ? new[] { "VRCUFM.exe", "VRChatUnfriendManager.exe", "Unfriendmaxxing.exe" }
-                    : new[] { "VRCUFM", "VRChatUnfriendManager", "Unfriendmaxxing" };
+                    ? new[] { "VRChatUnfriendManager.exe", "Unfriendmaxxing.exe" }
+                    : new[] { "VRChatUnfriendManager", "Unfriendmaxxing" };
 
                 string? newExeInStaging = null;
                 foreach (var name in exeNames)
@@ -609,26 +612,6 @@ cd ""$DEST_DIR"" && chmod +x ""$EXE_NAME"" && ./""$EXE_NAME"" &
                 downloading = false;
                 downloadProgress = 0f;
             }
-        }
-
-
-        static string ExtractSha256Token(string raw)
-        {
-            if (string.IsNullOrWhiteSpace(raw)) return "";
-            foreach (var part in raw.Trim().Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries))
-            {
-                string p = part.Trim().ToLowerInvariant().TrimStart('*');
-                if (p.Length >= 64)
-                {
-                    string hex = p.Substring(0, 64);
-                    if (hex.All(c => (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
-                        return hex;
-                }
-            }
-            var bits = raw.Trim().Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
-            if (bits.Length == 0) return "";
-            string first = bits[0].Trim().ToLowerInvariant();
-            return first.Length > 64 ? first.Substring(0, 64) : first;
         }
 
         #endregion

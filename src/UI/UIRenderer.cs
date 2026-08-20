@@ -343,8 +343,7 @@ public static class UIRenderer
             ImGui.SameLine();
             int done = TrustScoreService.EnrichDone;
             int total = Math.Max(1, TrustScoreService.EnrichTotal);
-            ImGui.TextColored(new Vector4(0.55f, 0.45f, 0.9f, 1f),
-                $"  ·  Trust {done}/{total}");
+            ImGui.TextColored(new Vector4(0.55f, 0.45f, 0.9f, 1f), $"  ·  Trust {done}/{total}");
             ImGui.ProgressBar(done / (float)total, new Vector2(-1, 4), "");
         }
         else if (Program.working && !Program.isUnfriending)
@@ -431,7 +430,6 @@ public static class UIRenderer
                 var together = Program.FormatTimeSpent(f.TimeSpentMs);
                 bool sel = Program.selected.Contains(i);
                 int score = TrustScoreService.Calculate(f);
-                // VRCNext-ish bands: green / cyan / yellow / orange / red
                 var scoreCol = score >= 80 ? new Vector4(0.35f, 0.95f, 0.45f, 1f) :
                                score >= 60 ? new Vector4(0.40f, 0.85f, 0.95f, 1f) :
                                score >= 40 ? new Vector4(0.9f, 0.7f, 0.1f, 1f) :
