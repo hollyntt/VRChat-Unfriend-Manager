@@ -10,6 +10,8 @@ public static class Paths
     public static readonly string ConfigFile = Path.Combine(AppDataFolder, "user.config");
     public static readonly string UnfriendLogFile = Path.Combine(AppDataFolder, "unfriend_log.json");
     public static readonly string FriendNotesFile = Path.Combine(AppDataFolder, "friend_notes.json");
+
+    /// <summary>Disk cache for VRCNext-style trust profile enrichment.</summary>
     public static readonly string TrustProfileCacheFile = Path.Combine(AppDataFolder, "trust_profiles.json");
 
     public static string VrcxBase => RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
