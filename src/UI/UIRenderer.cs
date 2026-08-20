@@ -175,7 +175,7 @@ public static class UIRenderer
         if (Program.isLoggedIn)
         {
             ImGui.SameLine();
-            ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), $"  •  {Program.loggedInAs}");
+            ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), $"  -  {Program.loggedInAs}");
             ImGui.SameLine();
             float logoutW = ImGui.CalcTextSize("Logout").X + 16;
             ImGui.SetCursorPosX(sw - logoutW - ImGui.GetStyle().WindowPadding.X);
@@ -463,7 +463,7 @@ public static class UIRenderer
                 {
                     var dl = ImGui.GetWindowDrawList();
                     dl.AddRectFilled(rowStart, rowStart + new Vector2(IMG_SIZE, IMG_SIZE), ImGui.GetColorU32(new Vector4(0.2f, 0.2f, 0.3f, 1f)));
-                    dl.AddText(rowStart + new Vector2(8, 8), ImGui.GetColorU32(new Vector4(0.5f, 0.5f, 0.6f, 1f)), "?");
+                    dl.AddText(rowStart + new Vector2(6, 8), ImGui.GetColorU32(new Vector4(0.5f, 0.5f, 0.6f, 1f)), "...");
                 }
 
                 ImGui.SameLine();
@@ -538,7 +538,7 @@ public static class UIRenderer
                 FriendsManager.SelectAllLowTime(Program.shown, Program.selected, tThreshMs);
             if (ImGui.MenuItem("Select Non-Favorites"))
                 FriendsManager.SelectNonFavorites(Program.shown, Program.selected, Program.favorites);
-            if (ImGui.MenuItem("Select Low Trust (≤25)"))
+            if (ImGui.MenuItem("Select Low Trust (<=25)"))
                 FriendsManager.SelectLowScore(Program.shown, Program.selected, Program.favorites, 25);
             if (ImGui.MenuItem("Invert Selection"))
                 FriendsManager.InvertSelection(Program.shown, Program.selected);
@@ -783,7 +783,7 @@ public static class UIRenderer
         bool open = true;
         if (ImGui.BeginPopupModal("##auto_confirm", ref open, ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoTitleBar))
         {
-            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), "⚠  Auto-Unfriend Scheduled Run");
+            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), "!  Auto-Unfriend Scheduled Run");
             ImGui.Separator();
             ImGui.Spacing();
             ImGui.TextWrapped($"The scheduler is about to unfriend {Program.pendingAutoCount} friend{(Program.pendingAutoCount == 1 ? "" : "s")}.");
@@ -900,9 +900,9 @@ public static class UIRenderer
             ImGui.Spacing();
             ImGui.Text("VRCX Integration");
             if (VRCXDataService.IsAvailable)
-                ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "✓ VRCX database found — time together data enabled");
+                ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "[OK] VRCX database found - time together data enabled");
             else
-                ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCX.sqlite3 not found — time together will show as '-'");
+                ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCX.sqlite3 not found - time together will show as '-'");
 
             bool vrcxDesktop = Program.config.VrcxStartupDesktop;
             if (ImGui.Checkbox("Launch with VRCX (Desktop)", ref vrcxDesktop))
@@ -926,9 +926,9 @@ public static class UIRenderer
             ImGui.Spacing();
             ImGui.Text("VRCNext Integration");
             if (VRCNextDataService.IsAvailable)
-                ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "✓ VRCNData.db found — time together data enabled");
+                ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "[OK] VRCNData.db found - time together data enabled");
             else
-                ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCNData.db not found — time together will show as '-'");
+                ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCNData.db not found - time together will show as '-'");
 
             bool vrcNextDesktop = Program.config.VrcNextStartupDesktop;
             if (ImGui.Checkbox("Launch with VRCNext (Desktop)", ref vrcNextDesktop))
@@ -1148,7 +1148,7 @@ public static class UIRenderer
                 ImGui.TextColored(barCol, $"{cur} / {Program.config.FriendLimitThreshold}");
 
                 if (ratio >= 1f)
-                    ImGui.TextColored(new Vector4(1f, 0.4f, 0.3f, 1f), "  ● At or above threshold — will trigger on next check");
+                    ImGui.TextColored(new Vector4(1f, 0.4f, 0.3f, 1f), "  * At or above threshold - will trigger on next check");
                 else
                     ImGui.TextDisabled($"  Checked every {Program.config.FriendLimitPollIntervalMinutes} minutes");
             }
