@@ -9,22 +9,20 @@ public class SafeLimitedUserFriend
     public string ThumbnailUrl { get; set; } = "";
     public string Bio { get; set; } = "";
 
-    // ── VRCNext Trusted Score profile fields (filled by enrichment) ──────
+    // VRCNext Trusted Score profile (filled by enrichment)
     public string DateJoined { get; set; } = "";
     public List<string> Tags { get; set; } = new();
-    public int BadgeCount { get; set; } = 0;
-    public bool AgeVerified { get; set; } = false;
-    public bool IsVrcPlus { get; set; } = false;
-    public bool IsEconomyCreator { get; set; } = false;
-    public int GroupCount { get; set; } = 0;
-    public bool IsRepresentingGroup { get; set; } = false;
-    public int UploadedWorlds { get; set; } = 0;
-    public int UploadedAvatars { get; set; } = 0;
-    public bool ProfileEnriched { get; set; } = false;
+    public int BadgeCount { get; set; }
+    public bool AgeVerified { get; set; }
+    public bool IsVrcPlus { get; set; }
+    public bool IsEconomyCreator { get; set; }
+    public int GroupCount { get; set; }
+    public bool IsRepresentingGroup { get; set; }
+    public int UploadedWorlds { get; set; }
+    public int UploadedAvatars { get; set; }
+    public bool ProfileEnriched { get; set; }
 
-    /// <summary>Cached VRCNext Trust Score (0–100). -1 = not computed yet.</summary>
+    /// <summary>0–100 VRCNext-style trust. -1 = not computed yet.</summary>
     public int TrustScore { get; set; } = -1;
-
-    /// <summary>Trust rank level 0–4 (Visitor … Trusted/Veteran).</summary>
-    public int TrustRankLevel { get; set; } = 0;
+    public int TrustRankLevel { get; set; }
 }

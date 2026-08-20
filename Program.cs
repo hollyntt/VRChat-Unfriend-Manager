@@ -75,8 +75,6 @@ namespace VRCUFM
         internal static CancellationTokenSource? autoDeclineCts;
         internal static readonly string[] units = { "Days", "Months", "Years" };
         internal static bool isLoggedIn = false;
-        internal static bool needsSetup = false;
-        internal static string setupInstallPath = "";
         internal static bool sessionRestored = false;
         internal static bool shouldExit = false;
 
@@ -162,24 +160,6 @@ namespace VRCUFM
             rlImGui.Setup(true);
             UIRenderer.ApplyTheme();
 
-            // First-run / migrate-from-Program-Files setup
-            needsSetup = InstallService.NeedsSetup(config);
-            if (string.IsNullOrWhiteSpace(setupInstallPath))
-                setupInstallPath = string.IsNullOrWhiteSpace(config.InstallPath)
-                    ? Paths.DefaultInstallDir
-                    : config.InstallPath;
-
-            // Already under Program Files with setup marked portable? Still OK.
-            // Fresh Program Files install without setup → force setup so updates can work.
-            if (!needsSetup && InstallService.IsUnderProgramFiles(InstallService.GetCurrentAppDir())
-                && !config.PortableMode
-                && string.IsNullOrWhiteSpace(config.InstallPath))
-            {
-                needsSetup = true;
-                setupInstallPath = Paths.DefaultInstallDir;
-            }
-
-
             user = config.Username;
             remember = config.RememberMe;
             hideFavs = config.ExcludeFavorites;
@@ -259,8 +239,7 @@ namespace VRCUFM
                     ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoScrollbar |
                     ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoBringToFrontOnFocus);
 
-                if (needsSetup) UIRenderer.DrawSetupScreen();
-                else if (sessionRestored || isLoggedIn) UIRenderer.DrawMainUI();
+                if (sessionRestored || isLoggedIn) UIRenderer.DrawMainUI();
                 else UIRenderer.DrawLoginScreen();
 
                 api.Draw2FADialog();
@@ -275,6 +254,7 @@ namespace VRCUFM
             autoCts?.Cancel();
             autoDeclineCts?.Cancel();
             unfriendCts?.Cancel();
+            TrustScoreService.CancelEnrichment();
 
             SaveConfig();
             TextureCache.UnloadAll();
@@ -367,6 +347,9 @@ namespace VRCUFM
                 }
 
                 await RefreshFriendRequests();
+
+                status = $"Scoring trust for {friends.Count} friends...";
+                TrustScoreService.StartEnrichment(friends, api);
 
                 status = $"Loaded {friends.Count} friends";
             }

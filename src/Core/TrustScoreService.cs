@@ -8,7 +8,8 @@ namespace VRCUFM.Core;
 
 /// <summary>
 /// VRCNext-compatible Trusted Score (0–100).
-/// Port of frontend/core/logic/core.js: getTrustCriteria + getTrustScorePct.
+/// Port of getTrustCriteria + getTrustScorePct (frontend core.js).
+/// Friends-list tags are empty — profiles are enriched via API + disk cache.
 /// </summary>
 public static class TrustScoreService
 {
@@ -121,17 +122,7 @@ public static class TrustScoreService
         return 0;
     }
 
-    public static string TrustRankLabel(int level) => level switch
-    {
-        >= 3 => "Trusted User",
-        2 => "Known User",
-        1 => "User",
-        _ => "Visitor"
-    };
-
-    /// <summary>
-    /// Port of getTrustCriteria + getTrustScorePct from VRCNext core.js.
-    /// </summary>
+    /// <summary>Exact VRCNext weighting.</summary>
     public static int Calculate(SafeLimitedUserFriend u)
     {
         if (u.TrustScore >= 0) return u.TrustScore;
@@ -167,32 +158,9 @@ public static class TrustScoreService
         if (totalWeight <= 0) { u.TrustScore = 0; return 0; }
 
         double pct = crit.Sum(c => c.score * c.weight) / totalWeight * 100.0;
-        int score = (int)Math.Round(pct);
-        u.TrustScore = Math.Clamp(score, 0, 100);
+        u.TrustScore = Math.Clamp((int)Math.Round(pct), 0, 100);
         return u.TrustScore;
     }
-
-    public static int CalculateFriendScore(SafeLimitedUserFriend friend, HashSet<string> favorites)
-        => Calculate(friend);
-
-    public static string Description(int pct) => pct switch
-    {
-        >= 100 => "This user has a trusted user standing within the community.",
-        >= 80 => "This user has a highly trusted standing within the community.",
-        >= 60 => "This user has a good standing within the community.",
-        >= 40 => "This user has some established trust within the community.",
-        >= 20 => "This user has a low level of established trust within the community.",
-        _ => "This user has no established trust within the community yet."
-    };
-
-    public static string Label(int score) => score switch
-    {
-        >= 80 => "High",
-        >= 60 => "Good",
-        >= 40 => "Some",
-        >= 20 => "Low",
-        _ => "None"
-    };
 
     public static void CancelEnrichment()
     {
@@ -266,10 +234,16 @@ public static class TrustScoreService
                                 sinceSave = 0;
                             }
                         }
+                        else
+                        {
+                            // Still score with whatever we have (bio from friends list, etc.)
+                            Calculate(f);
+                        }
                     }
                     catch (Exception ex)
                     {
-                        Console.WriteLine($"[TrustScore] Enrich {f.DisplayName}: {ex.Message}");
+                        Console.WriteLine("[TrustScore] Enrich " + f.DisplayName + ": " + ex.Message);
+                        try { Calculate(f); } catch { }
                     }
 
                     Interlocked.Increment(ref _enrichDone);

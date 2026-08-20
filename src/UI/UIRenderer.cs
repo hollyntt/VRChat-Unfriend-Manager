@@ -15,7 +15,7 @@ public static class UIRenderer
 {
     static readonly string[] togetherUnits = { "min", "hr", "days" };
     static readonly string[] searchFields = { "Name", "Group" };
-    static readonly string[] sorts = { "Oldest", "Newest", "A-Z", "Z-A", "Most Time", "Least Time", "Lowest Score", "Highest Score" };
+    static readonly string[] sorts = { "Oldest", "Newest", "A-Z", "Z-A", "Most Time", "Least Time", "Lowest Trust", "Highest Trust" };
     static readonly string[] autoModes = { "Inactive Only (3+ mo)", "All Shown", "Marked Only" };
 
     static string _noteBuffer = "";
@@ -62,110 +62,6 @@ public static class UIRenderer
         colors[(int)ImGuiCol.Separator] = new Vector4(0.25f, 0.25f, 0.35f, 1f);
         colors[(int)ImGuiCol.Text] = new Vector4(0.90f, 0.88f, 0.95f, 1f);
         colors[(int)ImGuiCol.TextDisabled] = new Vector4(0.50f, 0.48f, 0.55f, 1f);
-    }
-
-    public static void DrawSetupScreen()
-    {
-        int sw = Raylib.GetScreenWidth();
-        int sh = Raylib.GetScreenHeight();
-        float formW = Math.Min(480f, sw * 0.9f);
-        float formH = 340f;
-        float ox = (sw - formW) * 0.5f;
-        float oy = (sh - formH) * 0.5f;
-
-        ImGui.SetCursorPos(new Vector2(ox, oy));
-        ImGui.BeginChild("##setup_card", new Vector2(formW, formH), ImGuiChildFlags.Borders);
-
-        ImGui.Spacing();
-        ImGui.Text("Welcome — choose where to install");
-        ImGui.Separator();
-        ImGui.Spacing();
-
-        ImGui.TextWrapped(
-            "VRCUFM will copy itself into the folder below. Updates write to that same folder. " +
-            "Prefer a user folder (default) so updates do not need Administrator permission.");
-
-        ImGui.Spacing();
-        ImGui.Text("Install location");
-
-        string path = Program.setupInstallPath ?? "";
-        ImGui.SetNextItemWidth(-1);
-        if (ImGui.InputText("##install_path", ref path, 512))
-            Program.setupInstallPath = path;
-
-        if (ImGui.Button("Browse…"))
-        {
-            try
-            {
-                using var dlg = new FolderBrowserDialog
-                {
-                    Description = "Choose VRCUFM install folder",
-                    UseDescriptionForTitle = true,
-                    SelectedPath = Directory.Exists(Program.setupInstallPath)
-                        ? Program.setupInstallPath
-                        : Paths.DefaultInstallDir
-                };
-                if (dlg.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(dlg.SelectedPath))
-                    Program.setupInstallPath = dlg.SelectedPath;
-            }
-            catch (Exception ex)
-            {
-                Program.status = "Folder dialog failed: " + ex.Message;
-            }
-        }
-        ImGui.SameLine();
-        if (ImGui.Button("Use recommended"))
-            Program.setupInstallPath = Paths.DefaultInstallDir;
-
-        ImGui.Spacing();
-        bool startMenu = Program.config.StartMenuShortcut;
-        if (ImGui.Checkbox("Create Start Menu shortcut", ref startMenu))
-            Program.config.StartMenuShortcut = startMenu;
-
-        ImGui.Spacing();
-        ImGui.Separator();
-        ImGui.Spacing();
-
-        string cur = InstallService.GetCurrentAppDir();
-        if (InstallService.IsUnderProgramFiles(cur))
-        {
-            ImGui.TextColored(new Vector4(1f, 0.75f, 0.3f, 1f),
-                "Currently running from Program Files — updates will fail without Admin unless you install to a user folder.");
-            ImGui.Spacing();
-        }
-
-        float btnW = (formW - 48f) * 0.5f;
-        if (ImGui.Button("Install here", new Vector2(btnW, 36)))
-        {
-            try
-            {
-                Program.status = "Installing…";
-                InstallService.InstallAndRelaunch(
-                    Program.setupInstallPath,
-                    Program.config,
-                    Program.config.StartMenuShortcut,
-                    Program.SaveConfig);
-            }
-            catch (Exception ex)
-            {
-                Program.status = "Install failed: " + ex.Message;
-                MessageBox.Show(ex.Message, "Install failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-        ImGui.SameLine();
-        if (ImGui.Button("Run portable (skip)", new Vector2(btnW, 36)))
-        {
-            InstallService.MarkPortable(Program.config, Program.SaveConfig);
-            Program.needsSetup = false;
-            Program.status = "Running portable from " + cur;
-        }
-
-        ImGui.Spacing();
-        ImGui.TextDisabled("Default: " + Paths.DefaultInstallDir);
-        if (!string.IsNullOrEmpty(Program.status))
-            ImGui.TextColored(new Vector4(0.7f, 0.6f, 0.9f, 1f), Program.status);
-
-        ImGui.EndChild();
     }
 
     public static void DrawLoginScreen()
@@ -442,7 +338,16 @@ public static class UIRenderer
 
         ImGui.Separator();
         ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.7f, 1f), Program.status);
-        if (Program.working && !Program.isUnfriending)
+        if (TrustScoreService.IsEnriching)
+        {
+            ImGui.SameLine();
+            int done = TrustScoreService.EnrichDone;
+            int total = Math.Max(1, TrustScoreService.EnrichTotal);
+            ImGui.TextColored(new Vector4(0.55f, 0.45f, 0.9f, 1f),
+                $"  ·  Trust {done}/{total}");
+            ImGui.ProgressBar(done / (float)total, new Vector2(-1, 4), "");
+        }
+        else if (Program.working && !Program.isUnfriending)
             ImGui.ProgressBar(-1f * (float)(ImGui.GetTime() % 1.0), new Vector2(-1, 6), "");
 
         var excludedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -501,8 +406,8 @@ public static class UIRenderer
             3 => temp.OrderByDescending(f => f.DisplayName).ToList(),
             4 => temp.OrderByDescending(f => f.TimeSpentMs).ToList(),
             5 => temp.OrderBy(f => f.TimeSpentMs).ToList(),
-            6 => temp.OrderBy(f => FriendsManager.CalculateFriendScore(f, Program.favorites)).ToList(),
-            7 => temp.OrderByDescending(f => FriendsManager.CalculateFriendScore(f, Program.favorites)).ToList(),
+            6 => temp.OrderBy(f => TrustScoreService.Calculate(f)).ToList(),
+            7 => temp.OrderByDescending(f => TrustScoreService.Calculate(f)).ToList(),
             _ => temp.OrderBy(f => f.DisplayName).ToList()
         };
         Program.shown = temp;
@@ -513,7 +418,7 @@ public static class UIRenderer
 
         if (ImGui.BeginChild("##list", new Vector2(-1, listH), ImGuiChildFlags.Borders))
         {
-            ImGui.TextDisabled($"{"  ",-5}{"Name",-30} {"Score",-6} {"Last seen",-8}  {"Together",-9}  Group");
+            ImGui.TextDisabled($"{"  ",-5}{"Name",-30} {"Trust",-6} {"Last seen",-8}  {"Together",-9}  Group");
             ImGui.Separator();
 
             const float IMG_SIZE = 32f;
@@ -525,10 +430,13 @@ public static class UIRenderer
                 var ago = string.IsNullOrEmpty(f.LastLogin) ? "never" : Program.Ago(DateTime.Parse(f.LastLogin));
                 var together = Program.FormatTimeSpent(f.TimeSpentMs);
                 bool sel = Program.selected.Contains(i);
-                int score = FriendsManager.CalculateFriendScore(f, Program.favorites);
-                var scoreCol = score < 20 ? new Vector4(1f, 0.3f, 0.3f, 1f) :
-                               score < 50 ? new Vector4(0.9f, 0.7f, 0.1f, 1f) :
-                               new Vector4(0.4f, 0.9f, 0.5f, 1f);
+                int score = TrustScoreService.Calculate(f);
+                // VRCNext-ish bands: green / cyan / yellow / orange / red
+                var scoreCol = score >= 80 ? new Vector4(0.35f, 0.95f, 0.45f, 1f) :
+                               score >= 60 ? new Vector4(0.40f, 0.85f, 0.95f, 1f) :
+                               score >= 40 ? new Vector4(0.9f, 0.7f, 0.1f, 1f) :
+                               score >= 20 ? new Vector4(1f, 0.55f, 0.25f, 1f) :
+                               new Vector4(1f, 0.3f, 0.3f, 1f);
 
                 string groupLabel = "";
                 foreach (var (tag, ids) in Program.favByGroup.OrderBy(kv => kv.Key))
@@ -632,7 +540,7 @@ public static class UIRenderer
                 FriendsManager.SelectAllLowTime(Program.shown, Program.selected, tThreshMs);
             if (ImGui.MenuItem("Select Non-Favorites"))
                 FriendsManager.SelectNonFavorites(Program.shown, Program.selected, Program.favorites);
-            if (ImGui.MenuItem("Select Low Score (≤25)"))
+            if (ImGui.MenuItem("Select Low Trust (≤25)"))
                 FriendsManager.SelectLowScore(Program.shown, Program.selected, Program.favorites, 25);
             if (ImGui.MenuItem("Invert Selection"))
                 FriendsManager.InvertSelection(Program.shown, Program.selected);

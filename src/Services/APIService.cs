@@ -387,9 +387,7 @@ public class APIService
         };
     }
 
-    /// <summary>
-    /// Fetch full user profile fields needed for VRCNext Trusted Score.
-    /// </summary>
+    /// <summary>Full user fields needed for VRCNext Trusted Score.</summary>
     public async Task<UserTrustProfile?> FetchUserTrustProfileAsync(string userId)
     {
         if (string.IsNullOrEmpty(userId)) return null;
@@ -398,11 +396,11 @@ public class APIService
 
         try
         {
-            var resp = await http.GetAsync($"https://api.vrchat.cloud/api/1/users/{userId}");
+            var resp = await http.GetAsync("https://api.vrchat.cloud/api/1/users/" + userId);
             var body = await resp.Content.ReadAsStringAsync();
             if (!resp.IsSuccessStatusCode)
             {
-                Console.WriteLine($"[TrustScore] user {userId}: {resp.StatusCode}");
+                Console.WriteLine("[TrustScore] user " + userId + ": " + resp.StatusCode);
                 return null;
             }
 
@@ -442,13 +440,14 @@ public class APIService
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[TrustScore] profile fetch failed: {ex.Message}");
+            Console.WriteLine("[TrustScore] profile fetch failed: " + ex.Message);
             return null;
         }
 
+        // Groups (best-effort)
         try
         {
-            var gResp = await http.GetAsync($"https://api.vrchat.cloud/api/1/users/{userId}/groups?n=50");
+            var gResp = await http.GetAsync("https://api.vrchat.cloud/api/1/users/" + userId + "/groups?n=50");
             if (gResp.IsSuccessStatusCode)
             {
                 var gBody = await gResp.Content.ReadAsStringAsync();
@@ -469,16 +468,17 @@ public class APIService
         }
         catch { }
 
+        // Content presence (best-effort, n=1 is enough for the boolean criterion)
         try
         {
             var wResp = await http.GetAsync(
-                $"https://api.vrchat.cloud/api/1/worlds?userId={Uri.EscapeDataString(userId)}&n=1&sort=created&order=descending");
+                "https://api.vrchat.cloud/api/1/worlds?userId=" + Uri.EscapeDataString(userId) + "&n=1&sort=created&order=descending");
             if (wResp.IsSuccessStatusCode)
             {
                 var wBody = await wResp.Content.ReadAsStringAsync();
                 using var wDoc = JsonDocument.Parse(wBody);
                 if (wDoc.RootElement.ValueKind == JsonValueKind.Array && wDoc.RootElement.GetArrayLength() > 0)
-                    profile.UploadedWorlds = wDoc.RootElement.GetArrayLength();
+                    profile.UploadedWorlds = 1;
             }
         }
         catch { }
@@ -486,13 +486,13 @@ public class APIService
         try
         {
             var aResp = await http.GetAsync(
-                $"https://api.vrchat.cloud/api/1/avatars?userId={Uri.EscapeDataString(userId)}&n=1&releaseStatus=public");
+                "https://api.vrchat.cloud/api/1/avatars?userId=" + Uri.EscapeDataString(userId) + "&n=1&releaseStatus=public");
             if (aResp.IsSuccessStatusCode)
             {
                 var aBody = await aResp.Content.ReadAsStringAsync();
                 using var aDoc = JsonDocument.Parse(aBody);
                 if (aDoc.RootElement.ValueKind == JsonValueKind.Array && aDoc.RootElement.GetArrayLength() > 0)
-                    profile.UploadedAvatars = aDoc.RootElement.GetArrayLength();
+                    profile.UploadedAvatars = 1;
             }
         }
         catch { }
