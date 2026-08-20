@@ -7,7 +7,6 @@
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
         <UseWindowsForms>true</UseWindowsForms>
-        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
 
         <!-- Windows: embed icon into the .exe so it shows in Explorer -->
         <ApplicationIcon Condition="$([MSBuild]::IsOsPlatform('Windows'))">icon.ico</ApplicationIcon>

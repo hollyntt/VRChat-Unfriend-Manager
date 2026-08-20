@@ -1,22 +1,83 @@
 name: Build and Release
 
+permissions:
+  contents: write
+
 on:
   push:
     branches: [ master ]
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 jobs:
-  build:
-    runs-on: windows-latest
-
+  versioning:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Bump Version
+        id: bump
+        shell: bash
+        run: |
+          LATEST_TAG=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="v0.0.0"
+          fi
+          VERSION=${LATEST_TAG#v}
+          VERSION=$(echo "$VERSION" | tr -d '[:space:]')
+          IFS='.' read -r MAJOR MINOR PATCH <<< "${VERSION:-0.0.0}"
+          MAJOR=${MAJOR:-0}; MINOR=${MINOR:-0}; PATCH=${PATCH:-0}
+
+          BUMP="patch"
+          if [ "$LATEST_TAG" = "v0.0.0" ]; then
+            COMMITS=$(git log --pretty=format:"%s")
+          else
+            COMMITS=$(git log "${LATEST_TAG}..HEAD" --pretty=format:"%s" 2>/dev/null || git log --pretty=format:"%s")
+          fi
+
+          if echo "$COMMITS" | grep -qE "BREAKING CHANGE|^[a-zA-Z0-9_]+(\([a-zA-Z0-9_ -]+\))?!:"; then
+            BUMP="major"
+          elif echo "$COMMITS" | grep -qE "^feat(\([a-zA-Z0-9_ -]+\))?:"; then
+            BUMP="minor"
+          fi
+
+          if [ "$BUMP" = "major" ]; then
+            MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0
+          elif [ "$BUMP" = "minor" ]; then
+            MINOR=$((MINOR + 1)); PATCH=0
+          else
+            PATCH=$((PATCH + 1))
+          fi
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "New version: $NEW_VERSION (bump: $BUMP, was $LATEST_TAG)"
+
+      - name: Push new tag
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin "v${{ steps.bump.outputs.version }}"
+
+  build:
+    needs: versioning
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            rid: win-x64
+          - os: ubuntu-latest
+            rid: linux-x64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -25,133 +86,156 @@ jobs:
 
       - name: Restore
         run: dotnet restore Unfriendmaxxing.csproj
-        shell: powershell
 
-      - name: Determine semver
-        id: version
+      - name: Publish
+        shell: bash
+        run: |
+          dotnet publish Unfriendmaxxing.csproj \
+            -c Release \
+            -r ${{ matrix.rid }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:DebugType=embedded \
+            -p:EnableCompressionInSingleFile=true \
+            -p:PublishTrimmed=false \
+            -p:AssemblyName=VRCUFM \
+            -p:Version=${{ needs.versioning.outputs.version }} \
+            -p:AssemblyVersion=${{ needs.versioning.outputs.version }}.0 \
+            -p:FileVersion=${{ needs.versioning.outputs.version }}.0 \
+            -p:InformationalVersion=${{ needs.versioning.outputs.version }} \
+            -o ./publish/${{ matrix.rid }}
+
+      - name: Stage icons
+        shell: bash
+        run: |
+          for f in icon.ico icon.png; do
+            if [ -f "$f" ]; then cp "$f" "./publish/${{ matrix.rid }}/"; fi
+          done
+          ls -la "./publish/${{ matrix.rid }}"
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.rid }}
+          path: ./publish/${{ matrix.rid }}
+
+  appimage:
+    needs: [versioning, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Linux build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-linux-x64
+          path: ./publish/linux-x64
+
+      - name: Create AppImage
         shell: bash
         run: |
           set -euo pipefail
+          mkdir -p AppDir/usr/bin
+          cp -r ./publish/linux-x64/* AppDir/usr/bin/
 
-          # Latest vMAJOR.MINOR.PATCH tag (ignore old short-hash tags like v7dff27f)
-          last_tag=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
-          if [ -z "${last_tag}" ]; then
-            # Bootstrap from csproj <Version> (take first 3 parts) or 1.0.0
-            raw=$(grep -oP '(?<=<Version>)[^<]+' Unfriendmaxxing.csproj | head -n1 || true)
-            if [ -n "${raw}" ]; then
-              IFS=. read -r maj min pat _ <<<"${raw}"
-              maj=${maj:-1}; min=${min:-0}; pat=${pat:-0}
-              last_tag="v${maj}.${min}.${pat}"
-              range=""
-            else
-              last_tag="v0.0.0"
-              range=""
-            fi
-            echo "No semver tag yet; baseline ${last_tag}"
+          if [ -f icon.png ]; then
+            cp icon.png AppDir/vrcufm.png
+          elif [ -f AppDir/usr/bin/icon.png ]; then
+            cp AppDir/usr/bin/icon.png AppDir/vrcufm.png
           else
-            range="${last_tag}..HEAD"
+            printf 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' | base64 -d > AppDir/vrcufm.png
           fi
 
-          ver="${last_tag#v}"
-          IFS=. read -r major minor patch <<<"${ver}"
-          major=${major:-0}
-          minor=${minor:-0}
-          patch=${patch:-0}
+          cat > AppDir/vrcufm.desktop << 'EOF'
+          [Desktop Entry]
+          Name=VRChat Unfriend Manager
+          Exec=usr/bin/VRCUFM
+          Icon=vrcufm
+          Type=Application
+          Categories=Utility;
+          Terminal=false
+          EOF
+          sed -i 's/^[[:space:]]*//' AppDir/vrcufm.desktop
 
-          if [ -n "${range}" ]; then
-            log=$(git log ${range} --pretty=%s)
-          else
-            log=$(git log -20 --pretty=%s)
-          fi
+          cat > AppDir/AppRun << 'EOF'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "${0}")")"
+          exec "$HERE/usr/bin/VRCUFM" "$@"
+          EOF
+          chmod +x AppDir/AppRun
+          chmod +x AppDir/usr/bin/VRCUFM
 
-          bump="patch"
-          if echo "${log}" | grep -qiE '^(feat|feature)(\(.+\))?!:|^.+!:|BREAKING CHANGE'; then
-            bump="major"
-          elif echo "${log}" | grep -qiE '^(feat|feature)(\(.+\))?:'; then
-            bump="minor"
-          elif echo "${log}" | grep -qiE '^(fix|bugfix|perf|refactor)(\(.+\))?:'; then
-            bump="patch"
-          fi
+          wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool-x86_64.AppImage
 
-          # If HEAD is already exactly on last_tag (empty commit range), keep version
-          if [ -n "${range}" ] && [ -z "$(git log ${range} --pretty=%h)" ]; then
-            new="${major}.${minor}.${patch}"
-            echo "No new commits since ${last_tag}; reusing ${new}"
-          else
-            case "${bump}" in
-              major) major=$((major + 1)); minor=0; patch=0 ;;
-              minor) minor=$((minor + 1)); patch=0 ;;
-              patch) patch=$((patch + 1)) ;;
-            esac
-            new="${major}.${minor}.${patch}"
-            echo "Bump ${bump}: ${last_tag} -> v${new}"
-          fi
+          ARCH=x86_64 ./appimagetool-x86_64.AppImage --appimage-extract-and-run AppDir VRCUFM-x86_64.AppImage
+          ls -la VRCUFM-x86_64.AppImage
 
-          echo "version=${new}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${new}" >> "$GITHUB_OUTPUT"
-          echo "Resolved semver: v${new} (bump=${bump}, was ${last_tag})"
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage
+          path: VRCUFM-x86_64.AppImage
 
-      - name: Publish Windows x64
-        shell: powershell
+  package:
+    needs: [versioning, build, appimage]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all
+        uses: actions/download-artifact@v4
+        with:
+          path: ./builds
+
+      - name: Create VRCUFM.zip
+        shell: bash
         run: |
-          $ver = "${{ steps.version.outputs.version }}"
-          dotnet publish Unfriendmaxxing.csproj `
-            -c Release `
-            -r win-x64 `
-            --self-contained true `
-            -p:PublishSingleFile=true `
-            -p:DebugType=embedded `
-            -p:EnableCompressionInSingleFile=true `
-            -p:PublishTrimmed=false `
-            -p:AssemblyName=VRCUFM `
-            -p:Version=$ver `
-            -p:AssemblyVersion=$ver.0 `
-            -p:FileVersion=$ver.0 `
-            -p:InformationalVersion=$ver `
-            -o ./publish
+          mkdir -p VRCUFM/win-x64 VRCUFM/linux-x64
+          cp -r builds/build-win-x64/* VRCUFM/win-x64/ 2>/dev/null || true
+          cp -r builds/build-linux-x64/* VRCUFM/linux-x64/ 2>/dev/null || true
+          cp builds/appimage/VRCUFM-x86_64.AppImage VRCUFM/linux-x64/ 2>/dev/null || true
+          cd VRCUFM && zip -r ../VRCUFM.zip .
+          ls -la ../VRCUFM.zip
 
-      - name: Prepare bundle
-        shell: powershell
-        run: |
-          if (Test-Path "icon.ico") { Copy-Item "icon.ico" "./publish/" -Force }
-          if (Test-Path "icon.png") { Copy-Item "icon.png" "./publish/" -Force }
+      - name: Upload final VRCUFM.zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: VRCUFM
+          path: VRCUFM.zip
 
-          if (-not (Test-Path "./publish/VRCUFM.exe")) {
-            Write-Host "Publish directory listing:"
-            Get-ChildItem ./publish -Recurse | Select-Object FullName
-            throw "publish/VRCUFM.exe missing after publish"
-          }
+  release:
+    needs: [versioning, package, appimage]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download package
+        uses: actions/download-artifact@v4
+        with:
+          name: VRCUFM
 
-          Get-ChildItem ./publish | Format-Table Name, Length
+      - name: Download AppImage
+        uses: actions/download-artifact@v4
+        with:
+          name: appimage
 
-      - name: Zip release
-        shell: powershell
-        run: |
-          $zip = "./VRCUFM-win-x64.zip"
-          if (Test-Path $zip) { Remove-Item $zip -Force }
-          Compress-Archive -Path ./publish/* -DestinationPath $zip
-          Get-Item $zip | Format-List Name, Length
-
-      - name: Create/Update GitHub Release
+      - name: Create Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: ./VRCUFM-win-x64.zip
-          tag: ${{ steps.version.outputs.tag }}
-          name: ${{ steps.version.outputs.tag }}
+          artifacts: |
+            VRCUFM.zip
+            VRCUFM-x86_64.AppImage
+          tag: v${{ needs.versioning.outputs.version }}
+          name: v${{ needs.versioning.outputs.version }}
           body: |
-            **${{ steps.version.outputs.tag }}**
+            **v${{ needs.versioning.outputs.version }}**
 
-            Commit: `${{ github.sha }}`
+            **Windows:** extract `VRCUFM.zip` then run `win-x64/VRCUFM.exe`
 
-            **Zip (flat root):**
-            - `VRCUFM.exe`
-            - Native deps from publish
-            - Icons when present
-
-            App reports this version via `InformationalVersion` (Settings / updater).
+            **Linux:** extract `VRCUFM.zip` then run `linux-x64/VRCUFM`
+            or download `VRCUFM-x86_64.AppImage`, `chmod +x`, and run it.
           prerelease: false
-          allowUpdates: true
           makeLatest: true
-          omitBodyDuringUpdate: false
+          allowUpdates: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

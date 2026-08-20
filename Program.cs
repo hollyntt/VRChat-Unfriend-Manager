@@ -112,7 +112,8 @@ namespace VRCUFM
             Raylib.SetTraceLogLevel(TraceLogLevel.None);
             Console.SetOut(TextWriter.Null);
             Console.SetError(TextWriter.Null);
-            FreeConsole();
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                FreeConsole();
 #endif
 
             Paths.EnsureExists();
@@ -441,24 +442,37 @@ namespace VRCUFM
 
         public static void ClearUpdateError() => _updateError = null;
 
+        static bool IsRunningAppImage =>
+            !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("APPIMAGE"));
+
+        // XOSC-style: AppImage process -> VRCUFM-x86_64.AppImage; else VRCUFM.zip (win-x64/ / linux-x64/)
         static string? PickReleaseAssetUrl(System.Text.Json.JsonElement assets)
         {
-            string? preferred = null;
+            string? appImage = null;
+            string? bundleZip = null;
+            string? platformZip = null;
             string? anyZip = null;
+            bool isWin = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+
             foreach (var a in assets.EnumerateArray())
             {
                 var name = a.GetProperty("name").GetString() ?? "";
                 var url = a.GetProperty("browser_download_url").GetString();
                 if (string.IsNullOrEmpty(url)) continue;
-                if (name.Equals("VRCUFM-win-x64.zip", StringComparison.OrdinalIgnoreCase))
-                    preferred = url;
-                else if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase) &&
-                         name.Contains("win", StringComparison.OrdinalIgnoreCase))
-                    preferred ??= url;
+
+                if (name.Equals("VRCUFM-x86_64.AppImage", StringComparison.OrdinalIgnoreCase))
+                    appImage = url;
+                else if (name.Equals("VRCUFM.zip", StringComparison.OrdinalIgnoreCase))
+                    bundleZip = url;
+                else if (name.Equals(isWin ? "VRCUFM-win-x64.zip" : "VRCUFM-linux-x64.zip", StringComparison.OrdinalIgnoreCase))
+                    platformZip = url;
                 else if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                     anyZip ??= url;
             }
-            return preferred ?? anyZip;
+
+            if (IsRunningAppImage)
+                return appImage ?? bundleZip ?? platformZip ?? anyZip;
+            return bundleZip ?? platformZip ?? anyZip;
         }
 
         public static async Task CheckForUpdatesAsync()
@@ -549,7 +563,8 @@ namespace VRCUFM
             string? staging = null;
             try
             {
-                zipPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update.zip");
+                bool assetIsAppImage = _updateDownloadUrl?.Contains("AppImage", StringComparison.OrdinalIgnoreCase) == true;
+                zipPath = Path.Combine(Path.GetTempPath(), assetIsAppImage ? "VRCUFM_update.AppImage" : "VRCUFM_update.zip");
                 staging = Path.Combine(Path.GetTempPath(), "VRCUFM_staging_" + Environment.ProcessId);
                 if (Directory.Exists(staging)) Directory.Delete(staging, true);
                 Directory.CreateDirectory(staging);
@@ -574,63 +589,128 @@ namespace VRCUFM
                 }
 
                 _updateProgress = 1f;
-                _updateStatus = "Extracting...";
-                System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, staging, true);
 
-                string? exePath = Directory.GetFiles(staging, "VRCUFM.exe", SearchOption.AllDirectories).FirstOrDefault()
-                    ?? Directory.GetFiles(staging, "VRChatUnfriendManager.exe", SearchOption.AllDirectories).FirstOrDefault()
-                    ?? Directory.GetFiles(staging, "*.exe", SearchOption.AllDirectories)
+                var currentExe = Environment.ProcessPath
+                    ?? Path.Combine(AppContext.BaseDirectory,
+                        RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "VRCUFM.exe" : "VRCUFM");
+
+                // AppImage self-update (XOSC): replace $APPIMAGE binary, chmod, relaunch
+                if (IsRunningAppImage && assetIsAppImage)
+                {
+                    _updateStatus = "Installing AppImage...";
+                    string appImagePath = Environment.GetEnvironmentVariable("APPIMAGE")!;
+                    string bak = appImagePath + ".bak";
+                    if (File.Exists(bak)) File.Delete(bak);
+                    if (File.Exists(appImagePath)) File.Move(appImagePath, bak);
+                    File.Copy(zipPath!, appImagePath, true);
+                    try
+                    {
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = "chmod",
+                            Arguments = "+x \"" + appImagePath + "\"",
+                            UseShellExecute = false,
+                        })?.WaitForExit(5000);
+                    }
+                    catch { }
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = appImagePath,
+                        UseShellExecute = true,
+                    });
+                    _updateStatus = "Installing... app will restart";
+                    await Task.Delay(400);
+                    Environment.Exit(0);
+                    return;
+                }
+
+                _updateStatus = "Extracting...";
+                System.IO.Compression.ZipFile.ExtractToDirectory(zipPath!, staging!, true);
+
+                // Bundle layout: win-x64/ or linux-x64/ (XOSC-style VRCUFM.zip)
+                string platformFolder = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "win-x64" : "linux-x64";
+                string platformDir = Path.Combine(staging!, platformFolder);
+                string searchRoot = Directory.Exists(platformDir) ? platformDir : staging!;
+
+                string? exePath = Directory.GetFiles(searchRoot, "VRCUFM.exe", SearchOption.AllDirectories).FirstOrDefault()
+                    ?? Directory.GetFiles(searchRoot, "VRCUFM", SearchOption.AllDirectories)
+                        .FirstOrDefault(f => !f.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                    ?? Directory.GetFiles(searchRoot, "VRChatUnfriendManager.exe", SearchOption.AllDirectories).FirstOrDefault()
+                    ?? Directory.GetFiles(searchRoot, "*.exe", SearchOption.AllDirectories)
                         .OrderByDescending(f => new FileInfo(f).Length).FirstOrDefault();
 
                 if (exePath == null)
-                    throw new InvalidOperationException("No executable found in update zip.");
+                    throw new InvalidOperationException("No executable found in update package.");
 
                 var payloadDir = Path.GetDirectoryName(exePath)!;
-                var currentExe = Environment.ProcessPath
-                    ?? Path.Combine(AppContext.BaseDirectory, "VRCUFM.exe");
                 var appDir = Path.GetDirectoryName(currentExe)!;
                 var exeName = Path.GetFileName(currentExe);
 
                 var logPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update.log");
-                var scriptPath = Path.Combine(Path.GetTempPath(), "VRCUFM_apply_update.cmd");
-                var script =
-        @"@echo off
-        setlocal
-        set LOG=" + logPath + @"
-        echo time=%date% %time% > ""%LOG%""
-        echo pid=" + Environment.ProcessId + @">> ""%LOG%""
-        echo payload=" + payloadDir + @">> ""%LOG%""
-        echo appDir=" + appDir + @">> ""%LOG%""
-        echo exe=" + exeName + @">> ""%LOG%""
-        echo ==== update start %date% %time%>> ""%LOG%""
-        set SRC=" + payloadDir + @"
-        set DST=" + appDir + @"
-        set EXE=" + exeName + @"
-        :wait
-        tasklist /FI ""PID eq " + Environment.ProcessId + @""" 2>NUL | find /I """ + Environment.ProcessId + @""" >NUL
-        if not errorlevel 1 (
-          timeout /t 1 /nobreak >NUL
-          goto wait
-        )
-        echo process exited>> ""%LOG%""
-        echo copying files...>> ""%LOG%""
-        where robocopy >NUL 2>&1
-        if not errorlevel 1 (
-          robocopy ""%SRC%"" ""%DST%"" /E /R:8 /W:1 /NFL /NDL /NJH /NJS >> ""%LOG%"" 2>&1
-        ) else (
-          xcopy ""%SRC%\*"" ""%DST%\"" /E /Y /C /Q >> ""%LOG%"" 2>&1
-        )
-        if exist ""%DST%\%EXE%"" (
-          if exist ""%DST%\%EXE%.bak"" del /f /q ""%DST%\%EXE%.bak""
-          ren ""%DST%\%EXE%"" ""%EXE%.bak"" 2>> ""%LOG%""
-        )
-        copy /Y ""%SRC%\%EXE%"" ""%DST%\%EXE%"" >> ""%LOG%"" 2>&1
-        echo copy done>> ""%LOG%""
-        echo launching ""%DST%\%EXE%"">> ""%LOG%""
-        start """" ""%DST%\%EXE%""
-        del ""%~f0""
-        ";
-                await File.WriteAllTextAsync(scriptPath, script);
+                bool isWin = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+                var scriptPath = Path.Combine(Path.GetTempPath(), isWin ? "VRCUFM_apply_update.cmd" : "VRCUFM_apply_update.sh");
+
+                if (isWin)
+                {
+                    // Regular strings: use \\ for a single backslash in the output script
+                    var script =
+                        "@echo off" + Environment.NewLine
+                        + "setlocal" + Environment.NewLine
+                        + "set LOG=" + logPath + Environment.NewLine
+                        + "echo time=%date% %time% > \"%LOG%\"" + Environment.NewLine
+                        + "echo pid=" + Environment.ProcessId + ">> \"%LOG%\"" + Environment.NewLine
+                        + "echo payload=" + payloadDir + ">> \"%LOG%\"" + Environment.NewLine
+                        + "echo appDir=" + appDir + ">> \"%LOG%\"" + Environment.NewLine
+                        + "echo exe=" + exeName + ">> \"%LOG%\"" + Environment.NewLine
+                        + "set SRC=" + payloadDir + Environment.NewLine
+                        + "set DST=" + appDir + Environment.NewLine
+                        + "set EXE=" + exeName + Environment.NewLine
+                        + ":wait" + Environment.NewLine
+                        + "tasklist /FI \"PID eq " + Environment.ProcessId + "\" 2>NUL | find /I \"" + Environment.ProcessId + "\" >NUL" + Environment.NewLine
+                        + "if not errorlevel 1 (" + Environment.NewLine
+                        + "  timeout /t 1 /nobreak >NUL" + Environment.NewLine
+                        + "  goto wait" + Environment.NewLine
+                        + ")" + Environment.NewLine
+                        + "echo process exited>> \"%LOG%\"" + Environment.NewLine
+                        + "where robocopy >NUL 2>&1" + Environment.NewLine
+                        + "if not errorlevel 1 (" + Environment.NewLine
+                        + "  robocopy \"%SRC%\" \"%DST%\" /E /R:8 /W:1 /NFL /NDL /NJH /NJS >> \"%LOG%\" 2>&1" + Environment.NewLine
+                        + ") else (" + Environment.NewLine
+                        + "  xcopy \"%SRC%\\*\" \"%DST%\\\" /E /Y /C /Q >> \"%LOG%\" 2>&1" + Environment.NewLine
+                        + ")" + Environment.NewLine
+                        + "if exist \"%DST%\\%EXE%\" (" + Environment.NewLine
+                        + "  if exist \"%DST%\\%EXE%.bak\" del /f /q \"%DST%\\%EXE%.bak\"" + Environment.NewLine
+                        + "  ren \"%DST%\\%EXE%\" \"%EXE%.bak\" 2>> \"%LOG%\"" + Environment.NewLine
+                        + ")" + Environment.NewLine
+                        + "copy /Y \"%SRC%\\%EXE%\" \"%DST%\\%EXE%\" >> \"%LOG%\" 2>&1" + Environment.NewLine
+                        + "echo copy done>> \"%LOG%\"" + Environment.NewLine
+                        + "start \"\" \"%DST%\\%EXE%\"" + Environment.NewLine
+                        + "del \"%~f0\"" + Environment.NewLine;
+                    await File.WriteAllTextAsync(scriptPath, script);
+                }
+                else
+                {
+                    string Slash(string p) => p.Replace("\\", "/");
+                    var sh =
+                        "#!/bin/bash" + "\n"
+                        + "LOG=\"" + Slash(logPath) + "\"" + "\n"
+                        + "SRC=\"" + Slash(payloadDir) + "\"" + "\n"
+                        + "DST=\"" + Slash(appDir) + "\"" + "\n"
+                        + "EXE=\"" + exeName + "\"" + "\n"
+                        + "echo update start > \"$LOG\"" + "\n"
+                        + "while kill -0 " + Environment.ProcessId + " 2>/dev/null; do sleep 1; done" + "\n"
+                        + "echo process exited >> \"$LOG\"" + "\n"
+                        + "cp -rf \"$SRC/.\" \"$DST/\" >> \"$LOG\" 2>&1" + "\n"
+                        + "chmod +x \"$DST/$EXE\" >> \"$LOG\" 2>&1" + "\n"
+                        + "\"$DST/$EXE\" &" + "\n"
+                        + "rm -f \"$0\"" + "\n";
+                    await File.WriteAllTextAsync(scriptPath, sh);
+                    try
+                    {
+                        System.Diagnostics.Process.Start("chmod", "+x \"" + scriptPath + "\"")?.WaitForExit(3000);
+                    }
+                    catch { }
+                }
 
                 bool needAdmin = false;
                 try
