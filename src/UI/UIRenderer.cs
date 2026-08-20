@@ -64,6 +64,110 @@ public static class UIRenderer
         colors[(int)ImGuiCol.TextDisabled] = new Vector4(0.50f, 0.48f, 0.55f, 1f);
     }
 
+    public static void DrawSetupScreen()
+    {
+        int sw = Raylib.GetScreenWidth();
+        int sh = Raylib.GetScreenHeight();
+        float formW = Math.Min(480f, sw * 0.9f);
+        float formH = 340f;
+        float ox = (sw - formW) * 0.5f;
+        float oy = (sh - formH) * 0.5f;
+
+        ImGui.SetCursorPos(new Vector2(ox, oy));
+        ImGui.BeginChild("##setup_card", new Vector2(formW, formH), ImGuiChildFlags.Borders);
+
+        ImGui.Spacing();
+        ImGui.Text("Welcome — choose where to install");
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        ImGui.TextWrapped(
+            "VRCUFM will copy itself into the folder below. Updates write to that same folder. " +
+            "Prefer a user folder (default) so updates do not need Administrator permission.");
+
+        ImGui.Spacing();
+        ImGui.Text("Install location");
+
+        string path = Program.setupInstallPath ?? "";
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputText("##install_path", ref path, 512))
+            Program.setupInstallPath = path;
+
+        if (ImGui.Button("Browse…"))
+        {
+            try
+            {
+                using var dlg = new FolderBrowserDialog
+                {
+                    Description = "Choose VRCUFM install folder",
+                    UseDescriptionForTitle = true,
+                    SelectedPath = Directory.Exists(Program.setupInstallPath)
+                        ? Program.setupInstallPath
+                        : Paths.DefaultInstallDir
+                };
+                if (dlg.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(dlg.SelectedPath))
+                    Program.setupInstallPath = dlg.SelectedPath;
+            }
+            catch (Exception ex)
+            {
+                Program.status = "Folder dialog failed: " + ex.Message;
+            }
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Use recommended"))
+            Program.setupInstallPath = Paths.DefaultInstallDir;
+
+        ImGui.Spacing();
+        bool startMenu = Program.config.StartMenuShortcut;
+        if (ImGui.Checkbox("Create Start Menu shortcut", ref startMenu))
+            Program.config.StartMenuShortcut = startMenu;
+
+        ImGui.Spacing();
+        ImGui.Separator();
+        ImGui.Spacing();
+
+        string cur = InstallService.GetCurrentAppDir();
+        if (InstallService.IsUnderProgramFiles(cur))
+        {
+            ImGui.TextColored(new Vector4(1f, 0.75f, 0.3f, 1f),
+                "Currently running from Program Files — updates will fail without Admin unless you install to a user folder.");
+            ImGui.Spacing();
+        }
+
+        float btnW = (formW - 48f) * 0.5f;
+        if (ImGui.Button("Install here", new Vector2(btnW, 36)))
+        {
+            try
+            {
+                Program.status = "Installing…";
+                InstallService.InstallAndRelaunch(
+                    Program.setupInstallPath,
+                    Program.config,
+                    Program.config.StartMenuShortcut,
+                    Program.SaveConfig);
+            }
+            catch (Exception ex)
+            {
+                Program.status = "Install failed: " + ex.Message;
+                MessageBox.Show(ex.Message, "Install failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Run portable (skip)", new Vector2(btnW, 36)))
+        {
+            InstallService.MarkPortable(Program.config, Program.SaveConfig);
+            Program.needsSetup = false;
+            Program.status = "Running portable from " + cur;
+        }
+
+        ImGui.Spacing();
+        ImGui.TextDisabled("Default: " + Paths.DefaultInstallDir);
+        if (!string.IsNullOrEmpty(Program.status))
+            ImGui.TextColored(new Vector4(0.7f, 0.6f, 0.9f, 1f), Program.status);
+
+        ImGui.EndChild();
+    }
+
     public static void DrawLoginScreen()
     {
         int sw = Raylib.GetScreenWidth();
@@ -861,16 +965,29 @@ public static class UIRenderer
         }
 
         bool hideInTaskbar = Program.config.HideInTaskbar;
-        if (ImGui.Checkbox("Minimize to system tray", ref hideInTaskbar))
+        if (ImGui.Checkbox("Enable System Tray (Hide from taskbar)", ref hideInTaskbar))
         {
             Program.config.HideInTaskbar = hideInTaskbar;
             Program.SaveConfig();
-            PlatformService.SetTrayModeEnabled(hideInTaskbar);
+
+            if (hideInTaskbar)
+            {
+                PlatformService.StartTrayThread(false);
+                PlatformService.ApplyTaskbarVisibility(true);
+            }
+            else
+            {
+                PlatformService.StopTrayThread();
+                PlatformService.ApplyTaskbarVisibility(false);
+                if (!PlatformService.WindowVisible) PlatformService.ShowMainWindow();
+            }
         }
-        ImGui.TextDisabled("Close or minimize sends the app to the tray. Left-click the tray icon to reopen. Quit from the tray menu.");
 
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-            ImGui.TextDisabled("Linux tray needs: pip install pystray pillow");
+        {
+            ImGui.SameLine();
+            ImGui.TextDisabled("(needs: pip install pystray pillow)");
+        }
 
         if (Directory.Exists(Paths.VrcxStartup))
         {

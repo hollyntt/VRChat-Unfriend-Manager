@@ -47,4 +47,14 @@ public class AppConfig
 
     public bool StartMenuShortcut { get; set; }
     public bool ShowStatsPanel { get; set; } = true;
+
+    /// <summary>User finished first-run setup (install or portable).</summary>
+    public bool SetupCompleted { get; set; } = false;
+
+    /// <summary>Directory the app was installed to (updates target this).</summary>
+    public string InstallPath { get; set; } = "";
+
+    /// <summary>Running in-place without copying to an install folder.</summary>
+    public bool PortableMode { get; set; } = false;
 }
+

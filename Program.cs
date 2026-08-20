@@ -75,6 +75,8 @@ namespace VRCUFM
         internal static CancellationTokenSource? autoDeclineCts;
         internal static readonly string[] units = { "Days", "Months", "Years" };
         internal static bool isLoggedIn = false;
+        internal static bool needsSetup = false;
+        internal static string setupInstallPath = "";
         internal static bool sessionRestored = false;
         internal static bool shouldExit = false;
 
@@ -160,6 +162,24 @@ namespace VRCUFM
             rlImGui.Setup(true);
             UIRenderer.ApplyTheme();
 
+            // First-run / migrate-from-Program-Files setup
+            needsSetup = InstallService.NeedsSetup(config);
+            if (string.IsNullOrWhiteSpace(setupInstallPath))
+                setupInstallPath = string.IsNullOrWhiteSpace(config.InstallPath)
+                    ? Paths.DefaultInstallDir
+                    : config.InstallPath;
+
+            // Already under Program Files with setup marked portable? Still OK.
+            // Fresh Program Files install without setup → force setup so updates can work.
+            if (!needsSetup && InstallService.IsUnderProgramFiles(InstallService.GetCurrentAppDir())
+                && !config.PortableMode
+                && string.IsNullOrWhiteSpace(config.InstallPath))
+            {
+                needsSetup = true;
+                setupInstallPath = Paths.DefaultInstallDir;
+            }
+
+
             user = config.Username;
             remember = config.RememberMe;
             hideFavs = config.ExcludeFavorites;
@@ -239,7 +259,8 @@ namespace VRCUFM
                     ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoScrollbar |
                     ImGuiWindowFlags.NoScrollWithMouse | ImGuiWindowFlags.NoBringToFrontOnFocus);
 
-                if (sessionRestored || isLoggedIn) UIRenderer.DrawMainUI();
+                if (needsSetup) UIRenderer.DrawSetupScreen();
+                else if (sessionRestored || isLoggedIn) UIRenderer.DrawMainUI();
                 else UIRenderer.DrawLoginScreen();
 
                 api.Draw2FADialog();
@@ -409,15 +430,6 @@ namespace VRCUFM
 
         #region Updates
 
-        // release.yml contract:
-        //   tag v{shortSha} == InformationalVersion / AppVersion
-        //   VRCUFM-win-x64.zip (flat: VRCUFM.exe + native dlls + icons)
-        //   optional VRCUFM-win-x64.zip.sha256
-        //
-        // Apply: wait for this process to exit, then copy EVERY file from the
-        // payload folder over the install dir (exe + dlls). Single-file rename
-        // alone is not enough — native deps must be replaced too.
-
         internal static async Task CheckForUpdatesAsync()
         {
             checkingForUpdate = true;
@@ -428,82 +440,46 @@ namespace VRCUFM
 
             try
             {
-                using var client = CreateUpdaterHttpClient();
-                using var response = await client.GetAsync(
+                using var client = new HttpClient();
+                client.DefaultRequestHeaders.UserAgent.ParseAdd("Unfriendmaxxing-Updater");
+                var response = await client.GetAsync(
                     "https://api.github.com/repos/hollyntt/VRChat-Unfriend-Manager/releases/latest");
-                response.EnsureSuccessStatusCode();
-
-                using var doc = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+                var json = await response.Content.ReadAsStringAsync();
+                using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
 
                 string tag = root.GetProperty("tag_name").GetString() ?? "";
-                latestVersion = NormalizeVersion(tag);
-                string local = NormalizeVersion(AppVersion);
-                Console.WriteLine("[Updater] Local='" + local + "'  Latest='" + latestVersion + "'");
+                latestVersion = tag.TrimStart('v').Trim();
+                Console.WriteLine($"[Updater] Local: '{AppVersion}' Latest: '{latestVersion}'");
 
-                if (string.IsNullOrEmpty(latestVersion) ||
-                    string.Equals(latestVersion, local, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(latestVersion, AppVersion, StringComparison.OrdinalIgnoreCase))
                 {
                     updateAvailable = false;
                     return;
                 }
 
-                string winZip = null;
-                string anyZip = null;
-                string shaUrl = null;
-
                 foreach (var asset in root.GetProperty("assets").EnumerateArray())
                 {
-                    string name = asset.GetProperty("name").GetString() ?? "";
-                    string url = asset.GetProperty("browser_download_url").GetString() ?? "";
-                    if (string.IsNullOrEmpty(url)) continue;
-
-                    if (name.Equals("VRCUFM-win-x64.zip", StringComparison.OrdinalIgnoreCase))
-                        winZip = url;
-                    else if (name.Equals("VRCUFM-win-x64.zip.sha256", StringComparison.OrdinalIgnoreCase) ||
-                             name.EndsWith(".sha256", StringComparison.OrdinalIgnoreCase) ||
-                             name.EndsWith(".sha256.txt", StringComparison.OrdinalIgnoreCase))
+                    var name = asset.GetProperty("name").GetString() ?? "";
+                    var url  = asset.GetProperty("browser_download_url").GetString() ?? "";
+                    if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (shaUrl == null) shaUrl = url;
+                        downloadUrl = url;
+                        updateAvailable = true;
                     }
-                    else if (name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                    else if (name.EndsWith(".sha256", StringComparison.OrdinalIgnoreCase))
                     {
-                        if (anyZip == null) anyZip = url;
-                    }
-                }
-
-                downloadUrl = winZip ?? anyZip ?? "";
-                if (string.IsNullOrEmpty(downloadUrl))
-                {
-                    Console.WriteLine("[Updater] Latest release has no .zip asset");
-                    return;
-                }
-
-                if (!string.IsNullOrEmpty(shaUrl))
-                {
-                    try
-                    {
-                        string text = (await client.GetStringAsync(shaUrl)).Trim();
-                        string[] parts = text.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
-                        expectedHash = parts.Length > 0 ? parts[0] : "";
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine("[Updater] Could not fetch sha256: " + ex.Message);
+                        try
+                        {
+                            var hr = await client.GetAsync(url);
+                            expectedHash = (await hr.Content.ReadAsStringAsync()).Trim();
+                        }
+                        catch { }
                     }
                 }
-
-                updateAvailable = true;
-                Console.WriteLine("[Updater] Update available → " + downloadUrl);
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine("[Updater] Check failed: " + ex.Message);
-            }
-            finally
-            {
-                checkingForUpdate = false;
-            }
+            catch { }
+            finally { checkingForUpdate = false; }
         }
 
         internal static async Task DownloadAndInstallUpdateAsync()
@@ -513,306 +489,146 @@ namespace VRCUFM
             downloading = true;
             downloadProgress = 0f;
 
-            int pid = Environment.ProcessId;
-            string tempZip = Path.Combine(Path.GetTempPath(), "VRCUFM_update_" + pid + ".zip");
-            string stagingDir = Path.Combine(Path.GetTempPath(), "VRCUFM_staging_" + pid);
-            string logPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update.log");
-
             try
             {
-                using var client = CreateUpdaterHttpClient();
-                client.Timeout = TimeSpan.FromMinutes(10);
+                using var client = new HttpClient();
+                var tempZip = Path.Combine(Path.GetTempPath(), "VRCUFM_update.zip");
 
-                // Download
-                using (var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
+                using var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead);
+                response.EnsureSuccessStatusCode();
+                long totalBytes = response.Content.Headers.ContentLength ?? 0;
+
+                using var contentStream = await response.Content.ReadAsStreamAsync();
+                using var fs = new FileStream(tempZip, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 8192, true);
+                byte[] buffer = new byte[8192];
+                long totalRead = 0;
+                int read;
+                while ((read = await contentStream.ReadAsync(buffer)) > 0)
                 {
-                    response.EnsureSuccessStatusCode();
-                    long totalBytes = response.Content.Headers.ContentLength ?? 0;
-
-                    await using var input = await response.Content.ReadAsStreamAsync();
-                    await using var output = new FileStream(tempZip, FileMode.Create, FileAccess.ReadWrite, FileShare.None, 81920, true);
-
-                    byte[] buffer = new byte[81920];
-                    long totalRead = 0;
-                    int read;
-                    while ((read = await input.ReadAsync(buffer)) > 0)
-                    {
-                        await output.WriteAsync(buffer.AsMemory(0, read));
-                        totalRead += read;
-                        if (totalBytes > 0)
-                            downloadProgress = Math.Clamp((float)totalRead / totalBytes, 0f, 1f);
-                    }
-
-                    if (!string.IsNullOrEmpty(expectedHash))
-                    {
-                        output.Position = 0;
-                        using var sha = SHA256.Create();
-                        string actual = Convert.ToHexString(await sha.ComputeHashAsync(output)).ToLowerInvariant();
-                        string expected = expectedHash.Trim().ToLowerInvariant();
-                        int star = expected.IndexOf('*');
-                        if (star >= 0) expected = expected.Substring(0, star).Trim();
-
-                        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
-                        {
-                            try { File.Delete(tempZip); } catch { }
-                            MessageBox.Show(
-                                "Update package failed integrity check.\nExpected: " + expected + "\nGot: " + actual,
-                                "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                            return;
-                        }
-                    }
+                    await fs.WriteAsync(buffer.AsMemory(0, read));
+                    totalRead += read;
+                    if (totalBytes > 0) downloadProgress = (float)totalRead / totalBytes;
                 }
 
-                downloadProgress = 1f;
-
+                if (!string.IsNullOrEmpty(expectedHash))
+                {
+                    fs.Seek(0, SeekOrigin.Begin);
+                    using var sha = SHA256.Create();
+                    byte[] hash = await sha.ComputeHashAsync(fs);
+                    string actual = BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
+                    if (!string.Equals(actual, expectedHash, StringComparison.OrdinalIgnoreCase))
+                    {
+                        fs.Close();
+                        File.Delete(tempZip);
+                        MessageBox.Show($"Hash mismatch.\nExpected: {expectedHash}\nGot: {actual}",
+                            "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
+                    }
+                }
+                fs.Close();
+                string stagingDir = Path.Combine(Path.GetTempPath(), "VRCUFM_staging");
                 if (Directory.Exists(stagingDir)) Directory.Delete(stagingDir, true);
                 Directory.CreateDirectory(stagingDir);
                 ZipFile.ExtractToDirectory(tempZip, stagingDir);
-                try { File.Delete(tempZip); } catch { }
+                File.Delete(tempZip);
 
-                string newExe = FindUpdatedExecutable(stagingDir);
-                if (newExe == null)
+                bool isWin = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+                string[] exeNames = isWin
+                    ? new[] { "VRChatUnfriendManager.exe", "Unfriendmaxxing.exe" }
+                    : new[] { "VRChatUnfriendManager", "Unfriendmaxxing" };
+
+                string? newExeInStaging = null;
+                foreach (var name in exeNames)
                 {
-                    MessageBox.Show(
-                        "Update archive is missing VRCUFM.exe.",
+                    newExeInStaging = Directory.GetFiles(stagingDir, name, SearchOption.AllDirectories).FirstOrDefault();
+                    if (newExeInStaging != null) break;
+                }
+                if (newExeInStaging == null && isWin)
+                    newExeInStaging = Directory.GetFiles(stagingDir, "*.exe", SearchOption.AllDirectories).FirstOrDefault();
+
+                if (newExeInStaging == null)
+                {
+                    MessageBox.Show("Could not find executable in the update archive.",
                         "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
-
-                // Folder that actually holds VRCUFM.exe + dlls (flat zip → staging root)
-                string payloadRoot = Path.GetDirectoryName(newExe)!;
-
-                // Prefer ProcessPath (.NET 5+); fall back to MainModule
-                string currentExe =
-                    Environment.ProcessPath
-                    ?? Process.GetCurrentProcess().MainModule?.FileName
-                    ?? "";
-
-                if (string.IsNullOrEmpty(currentExe) || !File.Exists(currentExe))
+                string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? "";
+                if (string.IsNullOrEmpty(currentExe))
                 {
-                    MessageBox.Show("Cannot resolve the current executable path.",
-                        "Update Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show("Cannot determine current executable path.", "Update Failed",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
 
                 string appDir = Path.GetDirectoryName(currentExe)!;
-                string targetExeName = Path.GetFileName(newExe);
+                int currentPid = Environment.ProcessId;
 
-                // Persist install plan so a failed silent bat is still diagnosable
-                try
+                if (isWin)
                 {
-                    File.WriteAllText(logPath,
-                        "time=" + DateTime.Now.ToString("o") + "\n" +
-                        "pid=" + pid + "\n" +
-                        "payload=" + payloadRoot + "\n" +
-                        "appDir=" + appDir + "\n" +
-                        "exe=" + targetExeName + "\n" +
-                        "currentExe=" + currentExe + "\n");
+                    string psScriptPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update.ps1");
+                    string psScript = $@"
+param([int]$pidToWait, [string]$sourceDir, [string]$destDir, [string]$exeName)
+
+Wait-Process -Id $pidToWait -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+
+Copy-Item -Path ""$sourceDir\*"" -Destination $destDir -Recurse -Force
+
+Remove-Item -Recurse -Force $sourceDir
+Remove-Item -Force ""{psScriptPath}""
+
+Start-Process -FilePath ""$destDir\$exeName""
+".Trim();
+                    File.WriteAllText(psScriptPath, psScript);
+
+                    string exeRelativeName = Path.GetFileName(newExeInStaging);
+                    string args = $"-NoProfile -ExecutionPolicy Bypass -File \"{psScriptPath}\" -pidToWait {currentPid} -sourceDir \"{stagingDir}\" -destDir \"{appDir}\" -exeName \"{exeRelativeName}\"";
+                    Process.Start(new ProcessStartInfo("powershell.exe", args)
+                    {
+                        WindowStyle = ProcessWindowStyle.Hidden,
+                        CreateNoWindow = true,
+                        UseShellExecute = false
+                    });
                 }
-                catch { }
-
-                Console.WriteLine("[Updater] payload=" + payloadRoot);
-                Console.WriteLine("[Updater] install=" + appDir);
-                Console.WriteLine("[Updater] exe=" + targetExeName);
-                Console.WriteLine("[Updater] log=" + logPath);
-
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                    LaunchWindowsUpdater(pid, payloadRoot, appDir, targetExeName, stagingDir, logPath);
                 else
-                    LaunchUnixUpdater(pid, payloadRoot, appDir, targetExeName, stagingDir, logPath);
+                {
+                    string bashScriptPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update.sh");
+                    string bashScript = $@"#!/bin/bash
+PID_TO_WAIT={currentPid}
+SOURCE_DIR=""{stagingDir.Replace("\"", "\\\"")}""
+DEST_DIR=""{appDir.Replace("\"", "\\\"")}""
+EXE_NAME=""{Path.GetFileName(newExeInStaging).Replace("\"", "\\\"")}""
+SCRIPT_PATH=""{bashScriptPath.Replace("\"", "\\\"")}""
 
-                // Give the helper a moment to start before we die
-                Thread.Sleep(400);
+while kill -0 $PID_TO_WAIT 2>/dev/null; do sleep 1; done
+sleep 2
+
+cp -rf ""$SOURCE_DIR""/* ""$DEST_DIR""
+
+rm -rf ""$SOURCE_DIR""
+rm -f ""$SCRIPT_PATH""
+
+cd ""$DEST_DIR"" && chmod +x ""$EXE_NAME"" && ./""$EXE_NAME"" &
+".Trim();
+                    File.WriteAllText(bashScriptPath, bashScript);
+
+                    Process.Start("chmod", $"+x \"{bashScriptPath}\"").WaitForExit(500);
+                    Process.Start(new ProcessStartInfo("/bin/bash", bashScriptPath)
+                    {
+                        UseShellExecute = false,
+                        CreateNoWindow = true
+                    });
+                }
+
                 Environment.Exit(0);
             }
             catch (Exception ex)
             {
-                Console.WriteLine("[Updater] Install failed: " + ex);
-                MessageBox.Show("Update failed:\n" + ex.Message, "Update Error",
+                MessageBox.Show($"Update failed:\n{ex.Message}", "Update Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-            finally
-            {
                 downloading = false;
                 downloadProgress = 0f;
             }
-        }
-
-        static HttpClient CreateUpdaterHttpClient()
-        {
-            var client = new HttpClient();
-            client.DefaultRequestHeaders.UserAgent.ParseAdd("VRChat-Unfriend-Manager-Updater");
-            client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
-            client.Timeout = TimeSpan.FromSeconds(30);
-            return client;
-        }
-
-        static string NormalizeVersion(string v)
-        {
-            if (string.IsNullOrWhiteSpace(v)) return "";
-            v = v.Trim();
-            if (v.Length > 0 && (v[0] == 'v' || v[0] == 'V'))
-                v = v.Substring(1);
-            return v.Trim();
-        }
-
-        static string FindUpdatedExecutable(string stagingDir)
-        {
-            bool isWin = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
-            string[] names = isWin
-                ? new[] { "VRCUFM.exe", "VRChatUnfriendManager.exe", "Unfriendmaxxing.exe" }
-                : new[] { "VRCUFM", "VRChatUnfriendManager", "Unfriendmaxxing" };
-
-            foreach (var name in names)
-            {
-                string direct = Path.Combine(stagingDir, name);
-                if (File.Exists(direct)) return direct;
-                string[] found = Directory.GetFiles(stagingDir, name, SearchOption.AllDirectories);
-                if (found.Length > 0) return found[0];
-            }
-
-            if (isWin)
-            {
-                string[] all = Directory.GetFiles(stagingDir, "*.exe", SearchOption.AllDirectories);
-                if (all.Length == 0) return null;
-                Array.Sort(all, (a, b) => new FileInfo(b).Length.CompareTo(new FileInfo(a).Length));
-                return all[0];
-            }
-            return null;
-        }
-
-        /// <summary>
-        /// External helper: wait for PID, replace all payload files with retries,
-        /// then relaunch. Logs to logPath.
-        /// </summary>
-        static void LaunchWindowsUpdater(int pid, string payloadRoot, string appDir, string exeName, string stagingDir, string logPath)
-        {
-            string batPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update_" + pid + ".bat");
-
-            // Robust replace strategy:
-            //  1) Wait until our PID is gone (up to ~60s)
-            //  2) robocopy payload → install (retries); fall back to xcopy
-            //  3) Extra: force-replace the main exe via move-to-.bak + copy (XOSC-style)
-            //  4) Start new process
-            string bat =
-                "@echo off\r\n" +
-                "setlocal EnableExtensions EnableDelayedExpansion\r\n" +
-                "set \"LOG=" + logPath + "\"\r\n" +
-                "set \"PID=" + pid + "\"\r\n" +
-                "set \"SRC=" + payloadRoot + "\"\r\n" +
-                "set \"DST=" + appDir + "\"\r\n" +
-                "set \"EXE=" + exeName + "\"\r\n" +
-                "set \"STAGING=" + stagingDir + "\"\r\n" +
-                "echo ==== update start %DATE% %TIME%>>\"%LOG%\"\r\n" +
-                "echo SRC=%SRC%>>\"%LOG%\"\r\n" +
-                "echo DST=%DST%>>\"%LOG%\"\r\n" +
-                "echo EXE=%EXE%>>\"%LOG%\"\r\n" +
-                "\r\n" +
-                "set /a WAITED=0\r\n" +
-                ":wait\r\n" +
-                "tasklist /FI \"PID eq %PID%\" 2>NUL | find \"%PID%\" >NUL\r\n" +
-                "if not errorlevel 1 (\r\n" +
-                "  if !WAITED! GEQ 60 (\r\n" +
-                "    echo timed out waiting for PID %PID%>>\"%LOG%\"\r\n" +
-                "    goto copy\r\n" +
-                "  )\r\n" +
-                "  timeout /t 1 /nobreak >NUL\r\n" +
-                "  set /a WAITED+=1\r\n" +
-                "  goto wait\r\n" +
-                ")\r\n" +
-                "echo process exited after !WAITED!s>>\"%LOG%\"\r\n" +
-                "timeout /t 2 /nobreak >NUL\r\n" +
-                "\r\n" +
-                ":copy\r\n" +
-                "echo copying files...>>\"%LOG%\"\r\n" +
-                "where robocopy >NUL 2>&1\r\n" +
-                "if not errorlevel 1 (\r\n" +
-                "  robocopy \"%SRC%\" \"%DST%\" /E /IS /IT /R:8 /W:1 /NFL /NDL /NJH /NJS >>\"%LOG%\" 2>&1\r\n" +
-                "  set \"RC=!ERRORLEVEL!\"\r\n" +
-                "  echo robocopy exit=!RC!>>\"%LOG%\"\r\n" +
-                "  rem robocopy 0-7 are success\r\n" +
-                "  if !RC! GEQ 8 (\r\n" +
-                "    echo robocopy failed, trying xcopy>>\"%LOG%\"\r\n" +
-                "    xcopy \"%SRC%\\*\" \"%DST%\\\" /E /Y /I /H /R /C >>\"%LOG%\" 2>&1\r\n" +
-                "  )\r\n" +
-                ") else (\r\n" +
-                "  xcopy \"%SRC%\\*\" \"%DST%\\\" /E /Y /I /H /R /C >>\"%LOG%\" 2>&1\r\n" +
-                ")\r\n" +
-                "\r\n" +
-                "rem Force main exe swap (handles stubborn locks)\r\n" +
-                "if exist \"%DST%\\%EXE%\" (\r\n" +
-                "  if exist \"%DST%\\%EXE%.bak\" del /F /Q \"%DST%\\%EXE%.bak\" >NUL 2>&1\r\n" +
-                "  move /Y \"%DST%\\%EXE%\" \"%DST%\\%EXE%.bak\" >>\"%LOG%\" 2>&1\r\n" +
-                ")\r\n" +
-                "copy /Y \"%SRC%\\%EXE%\" \"%DST%\\%EXE%\" >>\"%LOG%\" 2>&1\r\n" +
-                "if not exist \"%DST%\\%EXE%\" (\r\n" +
-                "  echo FATAL: %EXE% missing after copy>>\"%LOG%\"\r\n" +
-                "  exit /b 1\r\n" +
-                ")\r\n" +
-                "\r\n" +
-                "echo copy done>>\"%LOG%\"\r\n" +
-                "rmdir /S /Q \"%STAGING%\" >NUL 2>&1\r\n" +
-                "echo launching \"%DST%\\%EXE%\">>\"%LOG%\"\r\n" +
-                "start \"\" \"%DST%\\%EXE%\"\r\n" +
-                "del \"%~f0\" >NUL 2>&1\r\n";
-
-            File.WriteAllText(batPath, bat);
-
-            // UseShellExecute=true so the helper outlives us more reliably
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = batPath,
-                UseShellExecute = true,
-                WorkingDirectory = Path.GetTempPath(),
-                WindowStyle = ProcessWindowStyle.Hidden
-            });
-        }
-
-        static void LaunchUnixUpdater(int pid, string payloadRoot, string appDir, string exeName, string stagingDir, string logPath)
-        {
-            string Q(string s) { return "\"" + s.Replace("\"", "\\\"") + "\""; }
-            string shPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update_" + pid + ".sh");
-            string sh =
-                "#!/bin/bash\n" +
-                "set -e\n" +
-                "LOG=" + Q(logPath) + "\n" +
-                "PID=" + pid + "\n" +
-                "SRC=" + Q(payloadRoot) + "\n" +
-                "DST=" + Q(appDir) + "\n" +
-                "EXE=" + Q(exeName) + "\n" +
-                "STAGING=" + Q(stagingDir) + "\n" +
-                "SCRIPT=" + Q(shPath) + "\n" +
-                "echo \"==== update start $(date -Iseconds)\" >>\"$LOG\"\n" +
-                "echo \"SRC=$SRC\" >>\"$LOG\"\n" +
-                "echo \"DST=$DST\" >>\"$LOG\"\n" +
-                "WAITED=0\n" +
-                "while kill -0 \"$PID\" 2>/dev/null; do\n" +
-                "  if [ \"$WAITED\" -ge 60 ]; then echo \"timeout waiting for $PID\" >>\"$LOG\"; break; fi\n" +
-                "  sleep 1\n" +
-                "  WAITED=$((WAITED+1))\n" +
-                "done\n" +
-                "sleep 2\n" +
-                "cp -rf \"$SRC\"/. \"$DST\"/ >>\"$LOG\" 2>&1\n" +
-                "chmod +x \"$DST/$EXE\" || true\n" +
-                "if [ ! -f \"$DST/$EXE\" ]; then echo \"FATAL: exe missing\" >>\"$LOG\"; exit 1; fi\n" +
-                "rm -rf \"$STAGING\"\n" +
-                "echo \"launching\" >>\"$LOG\"\n" +
-                "cd \"$DST\" && nohup \"./$EXE\" >/dev/null 2>&1 &\n" +
-                "rm -f \"$SCRIPT\"\n";
-
-            File.WriteAllText(shPath, sh);
-            try
-            {
-                Process.Start(new ProcessStartInfo("chmod", "+x " + Q(shPath)) { UseShellExecute = false })
-                    ?.WaitForExit(2000);
-            }
-            catch { }
-
-            Process.Start(new ProcessStartInfo("/bin/bash", shPath)
-            {
-                UseShellExecute = false,
-                CreateNoWindow = true
-            });
         }
 
         #endregion

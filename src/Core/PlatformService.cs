@@ -14,16 +14,9 @@ public static class PlatformService
 {
     #region Window and Tray Integration
 
-    // Modern minimize-to-tray (Discord / Slack style):
-    //  - Close (X) and Minimize both send the app to the tray when enabled
-    //  - Taskbar button is removed only while the window is in the tray
-    //  - Left-click or double-click the tray icon restores and focuses the window
-    //  - Quit is only via the tray menu (or when tray mode is off)
-
     public static bool WindowVisible = true;
     public static bool ShowRequested = false;
     private static bool _trayRunning = false;
-    private static bool _trayModeEnabled = false;
     private static Thread? _trayThread;
     private static NotifyIcon? _notifyIcon;
     private static readonly object _trayLock = new();
@@ -35,117 +28,53 @@ public static class PlatformService
     private static IntPtr _originalWndProc = IntPtr.Zero;
     private static GCHandle? _wndProcHandle;
     private static readonly WndProc _wndProcDelegate = WndProcHook;
-    private static IntPtr _hwnd = IntPtr.Zero;
 
     delegate IntPtr WndProc(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
 
-    const int SW_HIDE = 0, SW_SHOW = 5, SW_RESTORE = 9;
+    const int SW_HIDE = 0, SW_RESTORE = 9;
     const int GWL_WNDPROC = -4;
-    const int GWL_EXSTYLE = -20;
-    const int WS_EX_APPWINDOW = 0x00040000;
-    const int WS_EX_TOOLWINDOW = 0x00000080;
     const uint WM_SYSCOMMAND = 0x0112;
-    const uint WM_CLOSE = 0x0010;
     const long SC_MINIMIZE = 0xF020;
-    const long SC_CLOSE = 0xF060;
-    const uint SWP_NOSIZE = 0x0001, SWP_NOMOVE = 0x0002, SWP_NOZORDER = 0x0004, SWP_FRAMECHANGED = 0x0020;
-    const int HWND_TOP = 0;
 
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hWnd, int cmd);
-    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
-    [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr hWnd);
-    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr hWnd);
     [DllImport("user32.dll")] static extern IntPtr FindWindow(string? cls, string wnd);
     [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hWnd, int nIndex);
     [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr")] static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtr")] static extern IntPtr SetWindowLongPtr(IntPtr hWnd, int nIndex, IntPtr dwNewLong);
     [DllImport("user32.dll")] static extern IntPtr CallWindowProc(IntPtr lpPrevWndFunc, IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
-    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
-
-    static IntPtr GetMainHwnd()
-    {
-        if (_hwnd != IntPtr.Zero) return _hwnd;
-        _hwnd = FindWindow(null, "VRChat Unfriend Manager");
-        return _hwnd;
-    }
-
-    static void SetTaskbarVisible(bool visible)
-    {
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
-        try
-        {
-            var hwnd = GetMainHwnd();
-            if (hwnd == IntPtr.Zero) return;
-            int ex = GetWindowLong(hwnd, GWL_EXSTYLE);
-            if (visible)
-                ex = (ex | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW;
-            else
-                ex = (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW;
-            SetWindowLong(hwnd, GWL_EXSTYLE, ex);
-            SetWindowPos(hwnd, (IntPtr)HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
-        }
-        catch { }
-    }
 
     public static void ShowMainWindow()
     {
-        WindowVisible = true;
         ShowRequested = true;
-    }
-
-    public static void ApplyShowOnMainThread()
-    {
-        try
-        {
-            Raylib.ClearWindowState(ConfigFlags.HiddenWindow);
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                var hwnd = GetMainHwnd();
-                if (hwnd != IntPtr.Zero)
-                {
-                    SetTaskbarVisible(true);
-                    if (IsIconic(hwnd))
-                        ShowWindow(hwnd, SW_RESTORE);
-                    else
-                        ShowWindow(hwnd, SW_SHOW);
-                    BringWindowToTop(hwnd);
-                    SetForegroundWindow(hwnd);
-                }
-            }
-        }
-        catch { }
+        WindowVisible = true;
     }
 
     public static void HideMainWindow()
     {
-        if (!WindowVisible) return;
         WindowVisible = false;
-        try
-        {
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                var hwnd = GetMainHwnd();
-                if (hwnd != IntPtr.Zero)
-                {
-                    SetTaskbarVisible(false);
-                    ShowWindow(hwnd, SW_HIDE);
-                }
-            }
-            Raylib.SetWindowState(ConfigFlags.HiddenWindow);
-        }
-        catch
-        {
-            Raylib.SetWindowState(ConfigFlags.HiddenWindow);
-        }
+        Raylib.SetWindowState(ConfigFlags.HiddenWindow);
     }
 
     public static void ApplyTaskbarVisibility(bool hideFromTaskbar)
     {
-        if (!hideFromTaskbar || WindowVisible)
-            SetTaskbarVisible(true);
-        else
-            SetTaskbarVisible(false);
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
+        try
+        {
+            const int GWL_EXSTYLE = -20;
+            const int WS_EX_APPWINDOW = 0x00040000;
+            const int WS_EX_TOOLWINDOW = 0x00000080;
+            var hwnd = FindWindow(null, "VRChat Unfriend Manager");
+            if (hwnd == IntPtr.Zero) return;
+            int ex = GetWindowLong(hwnd, GWL_EXSTYLE);
+            ex = hideFromTaskbar
+                ? (ex & ~WS_EX_APPWINDOW & ~WS_EX_TOOLWINDOW)
+                : ((ex | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW);
+            SetWindowLong(hwnd, GWL_EXSTYLE, ex);
+            ShowWindow(hwnd, SW_HIDE);
+            ShowWindow(hwnd, SW_RESTORE);
+        }
+        catch { }
     }
 
     public static void EnableMinimizeToTray()
@@ -153,62 +82,33 @@ public static class PlatformService
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return;
         try
         {
-            for (int i = 0; i < 10 && GetMainHwnd() == IntPtr.Zero; i++)
-                Thread.Sleep(50);
-
-            var hwnd = GetMainHwnd();
+            var hwnd = FindWindow(null, "VRChat Unfriend Manager");
             if (hwnd == IntPtr.Zero) return;
-            if (_originalWndProc != IntPtr.Zero) return;
 
             _originalWndProc = GetWindowLongPtr(hwnd, GWL_WNDPROC);
             _wndProcHandle = GCHandle.Alloc(_wndProcDelegate);
             SetWindowLongPtr(hwnd, GWL_WNDPROC, Marshal.GetFunctionPointerForDelegate(_wndProcDelegate));
-            Console.WriteLine("[Tray] Window proc hooked (minimize/close → tray)");
+
+            Console.WriteLine("[Hook] Minimize button hooked successfully");
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Tray] Hook failed: {ex.Message}");
+            Console.WriteLine($"[Hook] Failed: {ex.Message}");
         }
     }
 
     static IntPtr WndProcHook(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam)
     {
-        if (_trayModeEnabled && _trayRunning)
+        if (msg == WM_SYSCOMMAND && wParam.ToInt64() == SC_MINIMIZE)
         {
-            if (msg == WM_SYSCOMMAND)
-            {
-                long cmd = wParam.ToInt64() & 0xFFF0;
-                if (cmd == SC_MINIMIZE || cmd == SC_CLOSE)
-                {
-                    HideMainWindow();
-                    return IntPtr.Zero;
-                }
-            }
-            if (msg == WM_CLOSE)
-            {
-                HideMainWindow();
-                return IntPtr.Zero;
-            }
+            HideMainWindow();
+            return IntPtr.Zero;
         }
         return CallWindowProc(_originalWndProc, hWnd, msg, wParam, lParam);
     }
 
-    public static void SetTrayModeEnabled(bool enabled)
-    {
-        _trayModeEnabled = enabled;
-        if (enabled)
-            StartTrayThread(false);
-        else
-        {
-            StopTrayThread();
-            if (!WindowVisible) ShowMainWindow();
-            else SetTaskbarVisible(true);
-        }
-    }
-
     public static void StartTrayThread(bool autostart)
     {
-        _trayModeEnabled = true;
         lock (_trayLock)
         {
             if (_trayRunning) return;
@@ -217,14 +117,11 @@ public static class PlatformService
             _trayRunning = true;
             _trayThread = new Thread(() =>
             {
-                try
-                {
-                    if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                        RunWindowsTray(autostart);
-                    else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-                        RunLinuxTray(autostart);
-                }
-                finally { _trayRunning = false; }
+                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                    RunWindowsTray(autostart);
+                else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                    RunLinuxTray(autostart);
+                _trayRunning = false;
             });
             _trayThread.IsBackground = true;
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -237,7 +134,6 @@ public static class PlatformService
     {
         lock (_trayLock)
         {
-            _trayModeEnabled = false;
             _trayRunning = false;
 
             if (_notifyIcon != null)
@@ -251,15 +147,9 @@ public static class PlatformService
                 catch { }
             }
 
-            try
-            {
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                    Application.ExitThread();
-            }
-            catch { }
-
             try { _linuxTrayProcess?.Kill(); } catch { }
             _linuxTrayProcess = null;
+
             try { _linuxTraySocket?.Close(); } catch { }
             _linuxTraySocket = null;
 
@@ -287,6 +177,7 @@ public static class PlatformService
                 {
                     if (path.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
                         return new Icon(path);
+
                     using var bmp = new Bitmap(path);
                     return Icon.FromHandle(bmp.GetHicon());
                 }
@@ -303,7 +194,9 @@ public static class PlatformService
         try
         {
             ApplicationConfiguration.Initialize();
+
             var icon = LoadTrayIcon();
+
             _notifyIcon = new NotifyIcon
             {
                 Icon = icon,
@@ -312,41 +205,24 @@ public static class PlatformService
             };
 
             var menu = new ContextMenuStrip();
-            menu.Items.Add("Open", null, (_, _) => ShowMainWindow());
+            menu.Items.Add("Show", null, (_, _) => ShowMainWindow());
             menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("Quit", null, (_, _) =>
-            {
-                Program.shouldExit = true;
-                try { Application.ExitThread(); } catch { }
-            });
+            menu.Items.Add("Exit", null, (_, _) => { Program.shouldExit = true; Application.ExitThread(); });
 
             _notifyIcon.ContextMenuStrip = menu;
-            _notifyIcon.MouseClick += (_, e) =>
-            {
-                if (e.Button == MouseButtons.Left)
-                    ShowMainWindow();
-            };
             _notifyIcon.DoubleClick += (_, _) => ShowMainWindow();
 
-            Console.WriteLine("[Tray] NotifyIcon ready");
+            Console.WriteLine("[TRAY] NotifyIcon created successfully");
+
             Application.Run();
+
+            _notifyIcon.Visible = false;
+            _notifyIcon.Dispose();
+            _notifyIcon = null;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Tray] RunWindowsTray failed: {ex.Message}");
-        }
-        finally
-        {
-            try
-            {
-                if (_notifyIcon != null)
-                {
-                    _notifyIcon.Visible = false;
-                    _notifyIcon.Dispose();
-                    _notifyIcon = null;
-                }
-            }
-            catch { }
+            Console.WriteLine($"[TRAY] RunWindowsTray failed: {ex.Message}");
         }
     }
 
@@ -355,14 +231,16 @@ public static class PlatformService
         if (autostart) HideMainWindow();
 
         string scriptPath = Path.Combine(Path.GetTempPath(), $"vum_tray_{Environment.ProcessId}.py");
+
         string iconPath = "icon.png";
         if (!File.Exists(iconPath)) iconPath = "icon.ico";
         string absIconPath = File.Exists(iconPath) ? Path.GetFullPath(iconPath) : "";
+
         string pySocketPath = _linuxSocketPath.Replace("\\", "\\\\");
         string pyIconPath = absIconPath.Replace("\\", "\\\\");
 
         string script = $@"
-import sys, socket, os
+import sys, socket, os, threading
 try:
     import pystray
     from PIL import Image, ImageDraw
@@ -376,7 +254,7 @@ def load_icon():
     if ICON and os.path.exists(ICON):
         try:
             return Image.open(ICON).resize((64, 64)).convert('RGBA')
-        except Exception:
+        except:
             pass
     img = Image.new('RGBA', (64, 64), (80, 40, 140, 255))
     d = ImageDraw.Draw(img)
@@ -389,19 +267,17 @@ def send_cmd(cmd):
         s.connect(SOCK)
         s.sendall(cmd.encode())
         s.close()
-    except Exception:
+    except:
         pass
 
-def on_show(icon, item):
-    send_cmd('show')
-
+def on_show(icon, item): send_cmd('show')
 def on_exit(icon, item):
     send_cmd('exit')
     icon.stop()
 
 menu = pystray.Menu(
-    pystray.MenuItem('Open', on_show, default=True),
-    pystray.MenuItem('Quit', on_exit),
+    pystray.MenuItem('Show', on_show, default=True),
+    pystray.MenuItem('Exit', on_exit),
 )
 tray = pystray.Icon('VRChat Unfriend Manager', load_icon(), 'VRChat Unfriend Manager', menu)
 tray.run()
@@ -424,6 +300,7 @@ tray.run()
                 System.Net.Sockets.Socket? client = null;
                 try { client = _linuxTraySocket.Accept(); }
                 catch { break; }
+
                 try
                 {
                     var buf = new byte[64];
@@ -451,15 +328,17 @@ tray.run()
         {
             _linuxTrayProcess = Process.Start(psi);
             _linuxTrayProcess?.WaitForExit();
-            if ((_linuxTrayProcess?.ExitCode ?? -1) == 42)
+
+            int exitCode = _linuxTrayProcess?.ExitCode ?? -1;
+            if (exitCode == 42)
             {
-                Console.WriteLine("[Tray] pystray / Pillow not found — tray icon unavailable.");
-                Console.WriteLine("[Tray] Install with:  pip install pystray pillow");
+                Console.WriteLine("[TRAY] pystray / Pillow not found — tray icon unavailable.");
+                Console.WriteLine("[TRAY] Install with:  pip install pystray pillow");
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[Tray] Failed to launch tray helper: {ex.Message}");
+            Console.WriteLine($"[TRAY] Failed to launch tray helper: {ex.Message}");
         }
         finally
         {
@@ -474,13 +353,12 @@ tray.run()
 
     public static void Cleanup()
     {
-        try { _wndProcHandle?.Free(); } catch { }
-        _wndProcHandle = null;
+        _wndProcHandle?.Free();
         StopTrayThread();
     }
 
     #endregion
-    
+
     #region Startup, Shortcuts, and Desktop Entries
 
     public static void UpdateStartup(bool enable)
@@ -515,7 +393,7 @@ tray.run()
         }
     }
 
-    public static void UpdateStartMenuShortcut(bool enable)
+    public static void UpdateStartMenuShortcut(bool enable, string? targetExeOverride = null)
     {
         try
         {
@@ -528,10 +406,12 @@ tray.run()
 
                 if (enable)
                 {
-                    var exePath = Process.GetCurrentProcess().MainModule?.FileName;
+                    var exePath = targetExeOverride;
+                    if (string.IsNullOrEmpty(exePath))
+                        exePath = Process.GetCurrentProcess().MainModule?.FileName;
                     if (string.IsNullOrEmpty(exePath)) return;
                     Directory.CreateDirectory(startMenuDir);
-                    CreateShellLink(lnkPath, exePath, "");
+                    CreateShellLink(lnkPath, exePath, Path.GetDirectoryName(exePath) ?? "");
                 }
                 else
                 {
