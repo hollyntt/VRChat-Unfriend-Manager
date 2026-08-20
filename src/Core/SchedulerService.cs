@@ -3,6 +3,7 @@ using VRChat.API.Model;
 using VRCUFM.AppSystem;
 using VRCUFM.Core;
 using VRCUFM.VRChat;
+using Program = VRCUFM.Program;
 
 namespace VRCUFM.Core;
 

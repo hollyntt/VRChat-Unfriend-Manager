@@ -409,6 +409,15 @@ namespace VRCUFM
 
         #region Updates
 
+        // release.yml contract:
+        //   tag v{shortSha} == InformationalVersion / AppVersion
+        //   VRCUFM-win-x64.zip (flat: VRCUFM.exe + native dlls + icons)
+        //   optional VRCUFM-win-x64.zip.sha256
+        //
+        // Apply: wait for this process to exit, then copy EVERY file from the
+        // payload folder over the install dir (exe + dlls). Single-file rename
+        // alone is not enough — native deps must be replaced too.
+
         internal static async Task CheckForUpdatesAsync()
         {
             checkingForUpdate = true;
@@ -504,14 +513,17 @@ namespace VRCUFM
             downloading = true;
             downloadProgress = 0f;
 
-            string tempZip = Path.Combine(Path.GetTempPath(), "VRCUFM_update_" + Environment.ProcessId + ".zip");
-            string stagingDir = Path.Combine(Path.GetTempPath(), "VRCUFM_staging_" + Environment.ProcessId);
+            int pid = Environment.ProcessId;
+            string tempZip = Path.Combine(Path.GetTempPath(), "VRCUFM_update_" + pid + ".zip");
+            string stagingDir = Path.Combine(Path.GetTempPath(), "VRCUFM_staging_" + pid);
+            string logPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update.log");
 
             try
             {
                 using var client = CreateUpdaterHttpClient();
                 client.Timeout = TimeSpan.FromMinutes(10);
 
+                // Download
                 using (var response = await client.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
                 {
                     response.EnsureSuccessStatusCode();
@@ -548,7 +560,6 @@ namespace VRCUFM
                                 "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                             return;
                         }
-                        Console.WriteLine("[Updater] SHA-256 OK");
                     }
                 }
 
@@ -563,33 +574,55 @@ namespace VRCUFM
                 if (newExe == null)
                 {
                     MessageBox.Show(
-                        "Update archive is missing VRCUFM.exe.\nThe release build may be misconfigured.",
+                        "Update archive is missing VRCUFM.exe.",
                         "Update Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
 
-                string payloadRoot = Path.GetDirectoryName(newExe);
-                string currentExe = Process.GetCurrentProcess().MainModule?.FileName ?? "";
-                if (string.IsNullOrEmpty(currentExe))
+                // Folder that actually holds VRCUFM.exe + dlls (flat zip → staging root)
+                string payloadRoot = Path.GetDirectoryName(newExe)!;
+
+                // Prefer ProcessPath (.NET 5+); fall back to MainModule
+                string currentExe =
+                    Environment.ProcessPath
+                    ?? Process.GetCurrentProcess().MainModule?.FileName
+                    ?? "";
+
+                if (string.IsNullOrEmpty(currentExe) || !File.Exists(currentExe))
                 {
                     MessageBox.Show("Cannot resolve the current executable path.",
                         "Update Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
 
-                string appDir = Path.GetDirectoryName(currentExe);
+                string appDir = Path.GetDirectoryName(currentExe)!;
                 string targetExeName = Path.GetFileName(newExe);
-                int pid = Environment.ProcessId;
+
+                // Persist install plan so a failed silent bat is still diagnosable
+                try
+                {
+                    File.WriteAllText(logPath,
+                        "time=" + DateTime.Now.ToString("o") + "\n" +
+                        "pid=" + pid + "\n" +
+                        "payload=" + payloadRoot + "\n" +
+                        "appDir=" + appDir + "\n" +
+                        "exe=" + targetExeName + "\n" +
+                        "currentExe=" + currentExe + "\n");
+                }
+                catch { }
 
                 Console.WriteLine("[Updater] payload=" + payloadRoot);
                 Console.WriteLine("[Updater] install=" + appDir);
                 Console.WriteLine("[Updater] exe=" + targetExeName);
+                Console.WriteLine("[Updater] log=" + logPath);
 
                 if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                    LaunchWindowsUpdater(pid, payloadRoot, appDir, targetExeName, stagingDir);
+                    LaunchWindowsUpdater(pid, payloadRoot, appDir, targetExeName, stagingDir, logPath);
                 else
-                    LaunchUnixUpdater(pid, payloadRoot, appDir, targetExeName, stagingDir);
+                    LaunchUnixUpdater(pid, payloadRoot, appDir, targetExeName, stagingDir, logPath);
 
+                // Give the helper a moment to start before we die
+                Thread.Sleep(400);
                 Environment.Exit(0);
             }
             catch (Exception ex)
@@ -648,64 +681,124 @@ namespace VRCUFM
             return null;
         }
 
-        static void LaunchWindowsUpdater(int pid, string payloadRoot, string appDir, string exeName, string stagingDir)
+        /// <summary>
+        /// External helper: wait for PID, replace all payload files with retries,
+        /// then relaunch. Logs to logPath.
+        /// </summary>
+        static void LaunchWindowsUpdater(int pid, string payloadRoot, string appDir, string exeName, string stagingDir, string logPath)
         {
             string batPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update_" + pid + ".bat");
+
+            // Robust replace strategy:
+            //  1) Wait until our PID is gone (up to ~60s)
+            //  2) robocopy payload → install (retries); fall back to xcopy
+            //  3) Extra: force-replace the main exe via move-to-.bak + copy (XOSC-style)
+            //  4) Start new process
             string bat =
                 "@echo off\r\n" +
-                "setlocal EnableExtensions\r\n" +
+                "setlocal EnableExtensions EnableDelayedExpansion\r\n" +
+                "set \"LOG=" + logPath + "\"\r\n" +
                 "set \"PID=" + pid + "\"\r\n" +
                 "set \"SRC=" + payloadRoot + "\"\r\n" +
                 "set \"DST=" + appDir + "\"\r\n" +
                 "set \"EXE=" + exeName + "\"\r\n" +
+                "set \"STAGING=" + stagingDir + "\"\r\n" +
+                "echo ==== update start %DATE% %TIME%>>\"%LOG%\"\r\n" +
+                "echo SRC=%SRC%>>\"%LOG%\"\r\n" +
+                "echo DST=%DST%>>\"%LOG%\"\r\n" +
+                "echo EXE=%EXE%>>\"%LOG%\"\r\n" +
                 "\r\n" +
+                "set /a WAITED=0\r\n" +
                 ":wait\r\n" +
                 "tasklist /FI \"PID eq %PID%\" 2>NUL | find \"%PID%\" >NUL\r\n" +
                 "if not errorlevel 1 (\r\n" +
+                "  if !WAITED! GEQ 60 (\r\n" +
+                "    echo timed out waiting for PID %PID%>>\"%LOG%\"\r\n" +
+                "    goto copy\r\n" +
+                "  )\r\n" +
                 "  timeout /t 1 /nobreak >NUL\r\n" +
+                "  set /a WAITED+=1\r\n" +
                 "  goto wait\r\n" +
                 ")\r\n" +
-                "timeout /t 1 /nobreak >NUL\r\n" +
+                "echo process exited after !WAITED!s>>\"%LOG%\"\r\n" +
+                "timeout /t 2 /nobreak >NUL\r\n" +
                 "\r\n" +
-                "xcopy \"%SRC%\\*\" \"%DST%\\\" /E /Y /I /Q /H /R\r\n" +
-                "if errorlevel 1 exit /b 1\r\n" +
+                ":copy\r\n" +
+                "echo copying files...>>\"%LOG%\"\r\n" +
+                "where robocopy >NUL 2>&1\r\n" +
+                "if not errorlevel 1 (\r\n" +
+                "  robocopy \"%SRC%\" \"%DST%\" /E /IS /IT /R:8 /W:1 /NFL /NDL /NJH /NJS >>\"%LOG%\" 2>&1\r\n" +
+                "  set \"RC=!ERRORLEVEL!\"\r\n" +
+                "  echo robocopy exit=!RC!>>\"%LOG%\"\r\n" +
+                "  rem robocopy 0-7 are success\r\n" +
+                "  if !RC! GEQ 8 (\r\n" +
+                "    echo robocopy failed, trying xcopy>>\"%LOG%\"\r\n" +
+                "    xcopy \"%SRC%\\*\" \"%DST%\\\" /E /Y /I /H /R /C >>\"%LOG%\" 2>&1\r\n" +
+                "  )\r\n" +
+                ") else (\r\n" +
+                "  xcopy \"%SRC%\\*\" \"%DST%\\\" /E /Y /I /H /R /C >>\"%LOG%\" 2>&1\r\n" +
+                ")\r\n" +
                 "\r\n" +
-                "rmdir /S /Q \"" + stagingDir + "\" >NUL 2>&1\r\n" +
-                "del \"%~f0\" >NUL 2>&1\r\n" +
-                "start \"\" \"%DST%\\%EXE%\"\r\n";
+                "rem Force main exe swap (handles stubborn locks)\r\n" +
+                "if exist \"%DST%\\%EXE%\" (\r\n" +
+                "  if exist \"%DST%\\%EXE%.bak\" del /F /Q \"%DST%\\%EXE%.bak\" >NUL 2>&1\r\n" +
+                "  move /Y \"%DST%\\%EXE%\" \"%DST%\\%EXE%.bak\" >>\"%LOG%\" 2>&1\r\n" +
+                ")\r\n" +
+                "copy /Y \"%SRC%\\%EXE%\" \"%DST%\\%EXE%\" >>\"%LOG%\" 2>&1\r\n" +
+                "if not exist \"%DST%\\%EXE%\" (\r\n" +
+                "  echo FATAL: %EXE% missing after copy>>\"%LOG%\"\r\n" +
+                "  exit /b 1\r\n" +
+                ")\r\n" +
+                "\r\n" +
+                "echo copy done>>\"%LOG%\"\r\n" +
+                "rmdir /S /Q \"%STAGING%\" >NUL 2>&1\r\n" +
+                "echo launching \"%DST%\\%EXE%\">>\"%LOG%\"\r\n" +
+                "start \"\" \"%DST%\\%EXE%\"\r\n" +
+                "del \"%~f0\" >NUL 2>&1\r\n";
 
             File.WriteAllText(batPath, bat);
+
+            // UseShellExecute=true so the helper outlives us more reliably
             Process.Start(new ProcessStartInfo
             {
-                FileName = "cmd.exe",
-                Arguments = "/C \"" + batPath + "\"",
-                WindowStyle = ProcessWindowStyle.Hidden,
-                CreateNoWindow = true,
-                UseShellExecute = false,
-                WorkingDirectory = Path.GetTempPath()
+                FileName = batPath,
+                UseShellExecute = true,
+                WorkingDirectory = Path.GetTempPath(),
+                WindowStyle = ProcessWindowStyle.Hidden
             });
         }
 
-        static void LaunchUnixUpdater(int pid, string payloadRoot, string appDir, string exeName, string stagingDir)
+        static void LaunchUnixUpdater(int pid, string payloadRoot, string appDir, string exeName, string stagingDir, string logPath)
         {
             string Q(string s) { return "\"" + s.Replace("\"", "\\\"") + "\""; }
             string shPath = Path.Combine(Path.GetTempPath(), "VRCUFM_update_" + pid + ".sh");
             string sh =
                 "#!/bin/bash\n" +
                 "set -e\n" +
+                "LOG=" + Q(logPath) + "\n" +
                 "PID=" + pid + "\n" +
                 "SRC=" + Q(payloadRoot) + "\n" +
                 "DST=" + Q(appDir) + "\n" +
                 "EXE=" + Q(exeName) + "\n" +
                 "STAGING=" + Q(stagingDir) + "\n" +
                 "SCRIPT=" + Q(shPath) + "\n" +
-                "while kill -0 \"$PID\" 2>/dev/null; do sleep 1; done\n" +
-                "sleep 1\n" +
-                "cp -rf \"$SRC\"/. \"$DST\"/\n" +
+                "echo \"==== update start $(date -Iseconds)\" >>\"$LOG\"\n" +
+                "echo \"SRC=$SRC\" >>\"$LOG\"\n" +
+                "echo \"DST=$DST\" >>\"$LOG\"\n" +
+                "WAITED=0\n" +
+                "while kill -0 \"$PID\" 2>/dev/null; do\n" +
+                "  if [ \"$WAITED\" -ge 60 ]; then echo \"timeout waiting for $PID\" >>\"$LOG\"; break; fi\n" +
+                "  sleep 1\n" +
+                "  WAITED=$((WAITED+1))\n" +
+                "done\n" +
+                "sleep 2\n" +
+                "cp -rf \"$SRC\"/. \"$DST\"/ >>\"$LOG\" 2>&1\n" +
                 "chmod +x \"$DST/$EXE\" || true\n" +
+                "if [ ! -f \"$DST/$EXE\" ]; then echo \"FATAL: exe missing\" >>\"$LOG\"; exit 1; fi\n" +
                 "rm -rf \"$STAGING\"\n" +
-                "rm -f \"$SCRIPT\"\n" +
-                "cd \"$DST\" && nohup \"./$EXE\" >/dev/null 2>&1 &\n";
+                "echo \"launching\" >>\"$LOG\"\n" +
+                "cd \"$DST\" && nohup \"./$EXE\" >/dev/null 2>&1 &\n" +
+                "rm -f \"$SCRIPT\"\n";
 
             File.WriteAllText(shPath, sh);
             try
