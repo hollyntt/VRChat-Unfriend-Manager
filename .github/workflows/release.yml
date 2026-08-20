@@ -21,23 +21,28 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Restore dependencies
-        run: dotnet restore
+      - name: Restore
+        # Restore the project (not only the solution) to avoid ambiguous outputs
+        run: dotnet restore Unfriendmaxxing.csproj
+        shell: powershell
 
       - name: Determine version (short commit hash)
         id: version
         shell: powershell
         run: |
           $hash = "${{ github.sha }}".Substring(0, 7)
-          # Same value is stamped into InformationalVersion and the release tag (v$hash)
-          # so the in-app updater can compare AppVersion == tag without leading "v".
           echo "version=$hash" >> $env:GITHUB_OUTPUT
           echo "Building version: $hash"
 
-      - name: Build Windows x64
+      - name: Publish Windows x64
         shell: powershell
         run: |
-          dotnet publish -c Release -r win-x64 --self-contained true `
+          # IMPORTANT: publish the .csproj, not the .sln
+          # (solution-level -o triggers NETSDK1194 and mixed outputs)
+          dotnet publish Unfriendmaxxing.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
             -p:PublishSingleFile=true `
             -p:DebugType=embedded `
             -p:EnableCompressionInSingleFile=true `
@@ -53,10 +58,11 @@ jobs:
           if (Test-Path "icon.png") { Copy-Item "icon.png" "./publish/" -Force }
 
           if (-not (Test-Path "./publish/VRCUFM.exe")) {
-            throw "publish/VRCUFM.exe missing — updater expects this exact name"
+            Write-Host "Publish directory listing:"
+            Get-ChildItem ./publish -Recurse | Select-Object FullName
+            throw "publish/VRCUFM.exe missing after publish"
           }
 
-          Write-Host "Publish folder contents:"
           Get-ChildItem ./publish | Format-Table Name, Length
 
       - name: Zip + SHA256
@@ -64,12 +70,9 @@ jobs:
         run: |
           $zip = "./VRCUFM-win-x64.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
-
-          # Flat zip at root (VRCUFM.exe + native dlls + icons) — matches updater
           Compress-Archive -Path ./publish/* -DestinationPath $zip
 
           $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
-          # Leading hex token only; updater parses the first field
           Set-Content -Path "./VRCUFM-win-x64.zip.sha256" -Value "$hash  VRCUFM-win-x64.zip" -NoNewline
           Write-Host "SHA256: $hash"
 
@@ -84,17 +87,14 @@ jobs:
           body: |
             Automated build from commit `${{ github.sha }}`
 
-            **Version:** `${{ steps.version.outputs.version }}` (short SHA — matches in-app `AppVersion`)
+            **Version:** `${{ steps.version.outputs.version }}`
 
-            **Zip layout (flat root):**
-            - `VRCUFM.exe` — main application
-            - Native deps from publish (`raylib.dll`, `cimgui.dll`, `sqlite3mc.dll`, …)
-            - `icon.ico` / `icon.png` when present in the repo
+            **Zip (flat root):**
+            - `VRCUFM.exe`
+            - Native deps from publish
+            - Icons when present
 
             **Integrity:** `VRCUFM-win-x64.zip.sha256`
-
-            In-app updater uses `/releases/latest`, verifies the hash when present,
-            replaces files next to the running exe, and relaunches `VRCUFM.exe`.
           prerelease: false
           allowUpdates: true
           makeLatest: true
