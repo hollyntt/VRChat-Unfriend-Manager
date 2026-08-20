@@ -1,11 +1,13 @@
 using System.Text.Json;
 using VRCUFM.AppSystem;
-using VRCUFM.Filesystem;
 using VRCUFM.VRChat;
 using File = System.IO.File;
 
 namespace VRCUFM.Core;
 
+/// <summary>
+/// VRCNext-style Trusted Score (0-100). Self-contained cache path so a stale Paths.cs cannot break builds.
+/// </summary>
 public static class TrustScoreService
 {
     private const int TrustRankMax = 4;
@@ -14,6 +16,12 @@ public static class TrustScoreService
     private const int TrustYearWeight = 3;
     private const int TrustGroupTarget = 20;
     private const double TrustGroupJoinWeight = 0.8;
+
+    // Own path — do NOT depend on Paths.TrustProfileCacheFile (partial merges kept dropping it).
+    private static readonly string CacheFile = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "VRChatUnfriendManager",
+        "trust_profiles.json");
 
     private static readonly object _cacheLock = new();
     private static Dictionary<string, CachedProfile> _cache = new(StringComparer.OrdinalIgnoreCase);
@@ -50,14 +58,14 @@ public static class TrustScoreService
             _cacheLoaded = true;
             try
             {
-                if (File.Exists(Paths.TrustProfileCacheFile))
+                if (File.Exists(CacheFile))
                 {
-                    var dict = JsonSerializer.Deserialize<Dictionary<string, CachedProfile>>(File.ReadAllText(Paths.TrustProfileCacheFile));
+                    var dict = JsonSerializer.Deserialize<Dictionary<string, CachedProfile>>(File.ReadAllText(CacheFile));
                     if (dict != null)
                         _cache = new Dictionary<string, CachedProfile>(dict, StringComparer.OrdinalIgnoreCase);
                 }
             }
-            catch { }
+            catch { /* ignore corrupt cache */ }
         }
     }
 
@@ -65,9 +73,10 @@ public static class TrustScoreService
     {
         try
         {
-            Paths.EnsureExists();
+            var dir = Path.GetDirectoryName(CacheFile);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             lock (_cacheLock)
-                File.WriteAllText(Paths.TrustProfileCacheFile, JsonSerializer.Serialize(_cache, new JsonSerializerOptions { WriteIndented = true }));
+                File.WriteAllText(CacheFile, JsonSerializer.Serialize(_cache, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch { }
     }
@@ -79,118 +88,160 @@ public static class TrustScoreService
         {
             if (!_cache.TryGetValue(f.Id, out var c)) return;
             if ((DateTime.UtcNow - c.CachedAt).TotalDays > 7) return;
-            f.DateJoined = c.DateJoined; f.Tags = c.Tags ?? new(); f.BadgeCount = c.BadgeCount;
-            f.AgeVerified = c.AgeVerified; f.IsVrcPlus = c.IsVrcPlus; f.IsEconomyCreator = c.IsEconomyCreator;
-            f.GroupCount = c.GroupCount; f.IsRepresentingGroup = c.IsRepresentingGroup;
-            f.UploadedWorlds = c.UploadedWorlds; f.UploadedAvatars = c.UploadedAvatars;
-            if (string.IsNullOrWhiteSpace(f.Bio) && !string.IsNullOrWhiteSpace(c.Bio)) f.Bio = c.Bio;
-            f.ProfileEnriched = true; f.TrustScore = -1; f.TrustRankLevel = GetTrustRankLevel(f.Tags);
+            ApplyProfile(f, c);
         }
+        f.TrustScore = Calculate(f);
     }
 
-    public static int GetTrustRankLevel(IList<string>? tags)
+    static void ApplyProfile(SafeLimitedUserFriend f, CachedProfile c)
     {
-        if (tags == null || tags.Count == 0) return 0;
-        if (tags.Any(t => t is "system_trust_legend" or "system_trust_veteran")) return 4;
-        if (tags.Contains("system_trust_trusted")) return 3;
-        if (tags.Contains("system_trust_known")) return 2;
-        if (tags.Contains("system_trust_basic")) return 1;
-        return 0;
+        f.DateJoined = c.DateJoined;
+        f.Tags = c.Tags ?? new List<string>();
+        f.BadgeCount = c.BadgeCount;
+        f.AgeVerified = c.AgeVerified;
+        f.IsVrcPlus = c.IsVrcPlus;
+        f.IsEconomyCreator = c.IsEconomyCreator;
+        f.GroupCount = c.GroupCount;
+        f.IsRepresentingGroup = c.IsRepresentingGroup;
+        f.UploadedWorlds = c.UploadedWorlds;
+        f.UploadedAvatars = c.UploadedAvatars;
+        if (!string.IsNullOrEmpty(c.Bio)) f.Bio = c.Bio;
+        f.ProfileEnriched = true;
     }
 
-    public static int Calculate(SafeLimitedUserFriend u)
+    public static int Calculate(SafeLimitedUserFriend f)
     {
-        if (u.TrustScore >= 0) return u.TrustScore;
-        var tags = u.Tags ?? new List<string>();
-        double years = 0;
-        if (!string.IsNullOrEmpty(u.DateJoined) && DateTime.TryParse(u.DateJoined, out var joined))
-            years = (DateTime.UtcNow - joined.ToUniversalTime()).TotalDays / 365.25;
-        int rankLevel = GetTrustRankLevel(tags);
-        u.TrustRankLevel = rankLevel;
-        var crit = new List<(double score, double weight)>
+        // Trust rank from tags (system_trust_*)
+        double rankScore = 0;
+        if (f.Tags != null)
         {
-            (rankLevel / (double)TrustRankMax, 1),
-            (u.AgeVerified ? 1.0 : 0.0, 1),
-            (Math.Clamp(years / TrustYearTarget, 0.0, 1.0), TrustYearWeight),
-            (u.IsVrcPlus || tags.Contains("system_supporter") ? 1.0 : 0.0, 1),
-            (Math.Min(Math.Max(0, u.BadgeCount) / (double)TrustBadgeTarget, 1.0), 1),
-            (!string.IsNullOrWhiteSpace(u.Bio) ? 1.0 : 0.0, 1),
-            ((u.UploadedWorlds + u.UploadedAvatars >= 1) ? 1.0 : 0.0, 1),
-            (Math.Min(Math.Max(0, u.GroupCount) / (double)TrustGroupTarget, 1.0) * TrustGroupJoinWeight
-             + (u.IsRepresentingGroup ? 1.0 - TrustGroupJoinWeight : 0.0), 1),
-        };
-        double tw = crit.Sum(c => c.weight);
-        if (tw <= 0) { u.TrustScore = 0; return 0; }
-        u.TrustScore = Math.Clamp((int)Math.Round(crit.Sum(c => c.score * c.weight) / tw * 100.0), 0, 100);
-        return u.TrustScore;
+            if (f.Tags.Any(t => t.Contains("system_trust_veteran", StringComparison.OrdinalIgnoreCase))) rankScore = 1.0;
+            else if (f.Tags.Any(t => t.Contains("system_trust_trusted", StringComparison.OrdinalIgnoreCase))) rankScore = 0.75;
+            else if (f.Tags.Any(t => t.Contains("system_trust_known", StringComparison.OrdinalIgnoreCase))) rankScore = 0.5;
+            else if (f.Tags.Any(t => t.Contains("system_trust_positive", StringComparison.OrdinalIgnoreCase))) rankScore = 0.25;
+        }
+
+        double ageVerified = f.AgeVerified ? 1.0 : 0.0;
+
+        double years = 0;
+        if (!string.IsNullOrEmpty(f.DateJoined) && DateTime.TryParse(f.DateJoined, out var joined))
+        {
+            years = Math.Max(0, (DateTime.UtcNow - joined.ToUniversalTime()).TotalDays / 365.25);
+        }
+        double ageScore = Math.Min(years / TrustYearTarget, 1.0);
+
+        double vrcPlus = f.IsVrcPlus || (f.Tags?.Any(t => t.Contains("system_supporter", StringComparison.OrdinalIgnoreCase)) == true) ? 1.0 : 0.0;
+        double badges = Math.Min(f.BadgeCount / (double)TrustBadgeTarget, 1.0);
+        double bio = string.IsNullOrWhiteSpace(f.Bio) ? 0.0 : 1.0;
+        double content = (f.UploadedWorlds + f.UploadedAvatars) >= 1 || f.IsEconomyCreator ? 1.0 : 0.0;
+        double groups = Math.Min(f.GroupCount / (double)TrustGroupTarget, 1.0) * TrustGroupJoinWeight
+                        + (f.IsRepresentingGroup ? (1.0 - TrustGroupJoinWeight) : 0.0);
+
+        // Weighted sum / total weight * 100  (VRCNext getTrustScorePct)
+        double weighted =
+            rankScore * 1.0 +
+            ageVerified * 1.0 +
+            ageScore * TrustYearWeight +
+            vrcPlus * 1.0 +
+            badges * 1.0 +
+            bio * 1.0 +
+            content * 1.0 +
+            groups * 1.0;
+
+        double totalWeight = 1 + 1 + TrustYearWeight + 1 + 1 + 1 + 1 + 1; // 10
+        int pct = (int)Math.Round(Math.Clamp(weighted / totalWeight * 100.0, 0, 100));
+        return pct;
     }
 
-    public static void CancelEnrichment() { _enrichCts?.Cancel(); _enriching = false; }
-
-    public static void StartEnrichment(List<SafeLimitedUserFriend> friends, APIService api)
+    public static void StartEnrichment(IReadOnlyList<SafeLimitedUserFriend> friends, Func<string, Task<UserTrustProfile?>> fetchProfile)
     {
-        CancelEnrichment();
-        EnsureCacheLoaded();
-        foreach (var f in friends) { ApplyCache(f); if (f.ProfileEnriched) Calculate(f); }
-        var need = friends.Where(f => !f.ProfileEnriched).ToList();
-        _enrichTotal = friends.Count; _enrichDone = friends.Count - need.Count;
-        if (need.Count == 0) return;
+        _enrichCts?.Cancel();
         _enrichCts = new CancellationTokenSource();
         var token = _enrichCts.Token;
         _enriching = true;
+        _enrichDone = 0;
+        _enrichTotal = friends.Count;
+
         _ = Task.Run(async () =>
         {
             try
             {
-                int sinceSave = 0;
-                foreach (var f in need)
+                EnsureCacheLoaded();
+                foreach (var f in friends)
                 {
                     if (token.IsCancellationRequested) break;
+
+                    bool needFetch;
+                    lock (_cacheLock)
+                    {
+                        needFetch = !_cache.TryGetValue(f.Id, out var c) || (DateTime.UtcNow - c.CachedAt).TotalDays > 7;
+                    }
+
+                    if (!needFetch)
+                    {
+                        ApplyCache(f);
+                        Interlocked.Increment(ref _enrichDone);
+                        continue;
+                    }
+
                     try
                     {
-                        var profile = await api.FetchUserTrustProfileAsync(f.Id);
+                        var profile = await fetchProfile(f.Id).ConfigureAwait(false);
                         if (profile != null)
                         {
-                            ApplyProfile(f, profile); Calculate(f);
-                            lock (_cacheLock)
+                            var cached = new CachedProfile
                             {
-                                _cache[f.Id] = new CachedProfile {
-                                    DateJoined = f.DateJoined, Tags = f.Tags.ToList(), BadgeCount = f.BadgeCount,
-                                    AgeVerified = f.AgeVerified, IsVrcPlus = f.IsVrcPlus, IsEconomyCreator = f.IsEconomyCreator,
-                                    GroupCount = f.GroupCount, IsRepresentingGroup = f.IsRepresentingGroup,
-                                    UploadedWorlds = f.UploadedWorlds, UploadedAvatars = f.UploadedAvatars,
-                                    Bio = f.Bio, CachedAt = DateTime.UtcNow
-                                };
-                            }
-                            if (++sinceSave >= 25) { SaveCache(); sinceSave = 0; }
+                                DateJoined = profile.DateJoined ?? "",
+                                Tags = profile.Tags ?? new List<string>(),
+                                BadgeCount = profile.BadgeCount,
+                                AgeVerified = profile.AgeVerified,
+                                IsVrcPlus = profile.IsVrcPlus,
+                                IsEconomyCreator = profile.IsEconomyCreator,
+                                GroupCount = profile.GroupCount,
+                                IsRepresentingGroup = profile.IsRepresentingGroup,
+                                UploadedWorlds = profile.UploadedWorlds,
+                                UploadedAvatars = profile.UploadedAvatars,
+                                Bio = profile.Bio ?? "",
+                                CachedAt = DateTime.UtcNow
+                            };
+                            lock (_cacheLock) _cache[f.Id] = cached;
+                            ApplyProfile(f, cached);
+                            f.TrustScore = Calculate(f);
+                            SaveCache();
                         }
-                        else Calculate(f);
+                        else
+                        {
+                            f.TrustScore = Calculate(f);
+                        }
                     }
-                    catch (Exception ex) { Console.WriteLine("[TrustScore] " + f.DisplayName + ": " + ex.Message); try { Calculate(f); } catch { } }
+                    catch
+                    {
+                        f.TrustScore = Calculate(f);
+                    }
+
                     Interlocked.Increment(ref _enrichDone);
-                    try { await Task.Delay(500, token); } catch (OperationCanceledException) { break; }
+                    try { await Task.Delay(500, token).ConfigureAwait(false); } catch { break; }
                 }
-                SaveCache();
             }
-            finally { _enriching = false; }
+            finally
+            {
+                _enriching = false;
+            }
         }, token);
     }
 
-    static void ApplyProfile(SafeLimitedUserFriend f, UserTrustProfile p)
+    public static void CancelEnrichment()
     {
-        f.DateJoined = p.DateJoined; f.Tags = p.Tags ?? new(); f.BadgeCount = p.BadgeCount;
-        f.AgeVerified = p.AgeVerified; f.IsVrcPlus = p.IsVrcPlus; f.IsEconomyCreator = p.IsEconomyCreator;
-        f.GroupCount = p.GroupCount; f.IsRepresentingGroup = p.IsRepresentingGroup;
-        f.UploadedWorlds = p.UploadedWorlds; f.UploadedAvatars = p.UploadedAvatars;
-        if (!string.IsNullOrWhiteSpace(p.Bio)) f.Bio = p.Bio;
-        f.ProfileEnriched = true; f.TrustScore = -1; f.TrustRankLevel = GetTrustRankLevel(f.Tags);
+        try { _enrichCts?.Cancel(); } catch { }
+        _enriching = false;
     }
 }
 
-public class UserTrustProfile
+/// <summary>Profile payload returned by APIService.FetchUserTrustProfileAsync.</summary>
+public sealed class UserTrustProfile
 {
-    public string DateJoined { get; set; } = "";
-    public List<string> Tags { get; set; } = new();
+    public string? DateJoined { get; set; }
+    public List<string>? Tags { get; set; }
     public int BadgeCount { get; set; }
     public bool AgeVerified { get; set; }
     public bool IsVrcPlus { get; set; }
@@ -199,5 +250,5 @@ public class UserTrustProfile
     public bool IsRepresentingGroup { get; set; }
     public int UploadedWorlds { get; set; }
     public int UploadedAvatars { get; set; }
-    public string Bio { get; set; } = "";
+    public string? Bio { get; set; }
 }
