@@ -15,7 +15,7 @@ public static class UIRenderer
 {
     static readonly string[] togetherUnits = { "min", "hr", "days" };
     static readonly string[] searchFields = { "Name", "Group" };
-    static readonly string[] sorts = { "Oldest", "Newest", "A-Z", "Z-A", "Most Time", "Least Time", "Lowest Score", "Highest Score" };
+    static readonly string[] sorts = { "Oldest", "Newest", "A-Z", "Z-A", "Most Time", "Least Time", "Lowest Trust", "Highest Trust" };
     static readonly string[] autoModes = { "Inactive Only (3+ mo)", "All Shown", "Marked Only" };
 
     static string _noteBuffer = "";
@@ -525,7 +525,14 @@ public static class UIRenderer
 
         if (ImGui.BeginChild("##list", new Vector2(-1, listH), ImGuiChildFlags.Borders))
         {
-            ImGui.TextDisabled($"{"  ",-5}{"Name",-30} {"Score",-6} {"Last seen",-8}  {"Together",-9}  Group");
+            
+            if (TrustScoreService.IsEnriching)
+            {
+                ImGui.SameLine();
+                ImGui.TextDisabled($"  Trust {TrustScoreService.EnrichDone}/{TrustScoreService.EnrichTotal}");
+            }
+
+            ImGui.TextDisabled($"{"  ",-5}{"Name",-30} {"Trust",-6} {"Last seen",-8}  {"Together",-9}  Group");
             ImGui.Separator();
 
             const float IMG_SIZE = 32f;
@@ -644,7 +651,7 @@ public static class UIRenderer
                 FriendsManager.SelectAllLowTime(Program.shown, Program.selected, tThreshMs);
             if (ImGui.MenuItem("Select Non-Favorites"))
                 FriendsManager.SelectNonFavorites(Program.shown, Program.selected, Program.favorites);
-            if (ImGui.MenuItem("Select Low Score (≤25)"))
+            if (ImGui.MenuItem("Select Low Trust (<=25)"))
                 FriendsManager.SelectLowScore(Program.shown, Program.selected, Program.favorites, 25);
             if (ImGui.MenuItem("Invert Selection"))
                 FriendsManager.InvertSelection(Program.shown, Program.selected);

@@ -363,6 +363,11 @@ namespace VRCUFM
 
                 await RefreshFriendRequests();
 
+                // Trust score: apply disk cache immediately, then enrich in background.
+                foreach (var f in friends)
+                    TrustScoreService.ApplyCache(f);
+                TrustScoreService.StartEnrichment(friends, id => api.FetchUserTrustProfileAsync(id));
+
                 status = $"Loaded {friends.Count} friends";
             }
             catch (Exception ex)
