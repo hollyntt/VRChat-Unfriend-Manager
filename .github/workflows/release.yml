@@ -1,15 +1,16 @@
-﻿name: Build and Release
+name: Build and Release
 
 on:
   push:
     branches: [ master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
-    permissions:
-      contents: write
 
     steps:
       - name: Checkout code
@@ -25,13 +26,16 @@ jobs:
 
       - name: Determine version (short commit hash)
         id: version
+        shell: powershell
         run: |
           $hash = "${{ github.sha }}".Substring(0, 7)
+          # Same value is stamped into InformationalVersion and the release tag (v$hash)
+          # so the in-app updater can compare AppVersion == tag without leading "v".
           echo "version=$hash" >> $env:GITHUB_OUTPUT
           echo "Building version: $hash"
-        shell: powershell
 
       - name: Build Windows x64
+        shell: powershell
         run: |
           dotnet publish -c Release -r win-x64 --self-contained true `
             -p:PublishSingleFile=true `
@@ -41,33 +45,59 @@ jobs:
             -p:AssemblyName=VRCUFM `
             -p:InformationalVersion=${{ steps.version.outputs.version }} `
             -o ./publish
-        shell: powershell
 
-      - name: Prepare and Zip Bundle
-        run: |
-          # Copy icons to the publish folder if they exist in the root
-          if (Test-Path "icon.ico") { Copy-Item "icon.ico" "./publish/" }
-          if (Test-Path "icon.png") { Copy-Item "icon.png" "./publish/" }
-          
-          # Zip the entire publish directory
-          Compress-Archive -Path ./publish/* -DestinationPath ./VRCUFM-win-x64.zip
+      - name: Prepare bundle
         shell: powershell
+        run: |
+          if (Test-Path "icon.ico") { Copy-Item "icon.ico" "./publish/" -Force }
+          if (Test-Path "icon.png") { Copy-Item "icon.png" "./publish/" -Force }
+
+          if (-not (Test-Path "./publish/VRCUFM.exe")) {
+            throw "publish/VRCUFM.exe missing — updater expects this exact name"
+          }
+
+          Write-Host "Publish folder contents:"
+          Get-ChildItem ./publish | Format-Table Name, Length
+
+      - name: Zip + SHA256
+        shell: powershell
+        run: |
+          $zip = "./VRCUFM-win-x64.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+
+          # Flat zip at root (VRCUFM.exe + native dlls + icons) — matches updater
+          Compress-Archive -Path ./publish/* -DestinationPath $zip
+
+          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+          # Leading hex token only; updater parses the first field
+          Set-Content -Path "./VRCUFM-win-x64.zip.sha256" -Value "$hash  VRCUFM-win-x64.zip" -NoNewline
+          Write-Host "SHA256: $hash"
 
       - name: Create/Update Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: ./VRCUFM-win-x64.zip
+          artifacts: |
+            ./VRCUFM-win-x64.zip
+            ./VRCUFM-win-x64.zip.sha256
           tag: v${{ steps.version.outputs.version }}
           name: v${{ steps.version.outputs.version }}
           body: |
-            Automated build from commit ${{ github.sha }}
-            
-            **Assets included in .zip:**
-            - `VRCUFM.exe` (Main Application)
-            - `raylib.dll`, `cimgui.dll`, `e_sqlite3.dll` (Native dependencies)
-            - `icon.ico`, `icon.png` (App resources)
+            Automated build from commit `${{ github.sha }}`
+
+            **Version:** `${{ steps.version.outputs.version }}` (short SHA — matches in-app `AppVersion`)
+
+            **Zip layout (flat root):**
+            - `VRCUFM.exe` — main application
+            - Native deps from publish (`raylib.dll`, `cimgui.dll`, `sqlite3mc.dll`, …)
+            - `icon.ico` / `icon.png` when present in the repo
+
+            **Integrity:** `VRCUFM-win-x64.zip.sha256`
+
+            In-app updater uses `/releases/latest`, verifies the hash when present,
+            replaces files next to the running exe, and relaunches `VRCUFM.exe`.
           prerelease: false
           allowUpdates: true
           makeLatest: true
+          omitBodyDuringUpdate: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
