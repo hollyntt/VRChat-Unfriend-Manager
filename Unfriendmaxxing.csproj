@@ -14,8 +14,8 @@
 
         <!-- Version info -->
         <Version>4.0.3</Version>
-        <AssemblyVersion>4.0.3.0</AssemblyVersion>
-        <FileVersion>4.0.3.0</FileVersion>
+        <AssemblyVersion>4.0.3.1</AssemblyVersion>
+        <FileVersion>4.0.3.1</FileVersion>
         <Product>VRChat Unfriend Manager</Product>
         <Description>Manage and unfriend VRChat friends</Description>
         <AssemblyName>VRCUFM</AssemblyName>
