@@ -13,9 +13,9 @@
         <ApplicationIcon Condition="$([MSBuild]::IsOsPlatform('Windows'))">icon.ico</ApplicationIcon>
 
         <!-- Version info -->
-        <Version>4.0.5.1</Version>
-        <AssemblyVersion>4.0.5.1</AssemblyVersion>
-        <FileVersion>4.0.5.1</FileVersion>
+        <Version>1.0.0</Version>
+        <AssemblyVersion>4.0.0.0</AssemblyVersion>
+        <FileVersion>1.0.0.0</FileVersion>
         <Product>VRChat Unfriend Manager</Product>
         <Description>Manage and unfriend VRChat friends</Description>
         <AssemblyName>VRCUFM</AssemblyName>

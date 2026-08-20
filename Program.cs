@@ -481,10 +481,16 @@ namespace VRCUFM
                 using var doc = System.Text.Json.JsonDocument.Parse(json);
                 var root = doc.RootElement;
                 var tag = root.GetProperty("tag_name").GetString() ?? "";
-                var remote = tag.TrimStart('v', 'V');
-                var local = AppVersion.TrimStart('v', 'V');
+                var remoteStr = tag.TrimStart('v', 'V').Split('-', '+')[0];
+                var localStr = AppVersion.TrimStart('v', 'V').Split('-', '+')[0];
 
-                if (string.Equals(remote, local, StringComparison.OrdinalIgnoreCase))
+                bool remoteNewer;
+                if (Version.TryParse(remoteStr, out var remoteVer) && Version.TryParse(localStr, out var localVer))
+                    remoteNewer = remoteVer > localVer;
+                else
+                    remoteNewer = !string.Equals(remoteStr, localStr, StringComparison.OrdinalIgnoreCase);
+
+                if (!remoteNewer)
                 {
                     _updateStatus = "Already on latest (" + tag + ")";
                     updateAvailable = false;

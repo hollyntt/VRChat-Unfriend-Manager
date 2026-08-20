@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -22,23 +24,77 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Restore
-        # Restore the project (not only the solution) to avoid ambiguous outputs
         run: dotnet restore Unfriendmaxxing.csproj
         shell: powershell
 
-      - name: Determine version (short commit hash)
+      - name: Determine semver
         id: version
-        shell: powershell
+        shell: bash
         run: |
-          $hash = "${{ github.sha }}".Substring(0, 7)
-          echo "version=$hash" >> $env:GITHUB_OUTPUT
-          echo "Building version: $hash"
+          set -euo pipefail
+
+          # Latest vMAJOR.MINOR.PATCH tag (ignore old short-hash tags like v7dff27f)
+          last_tag=$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1 || true)
+          if [ -z "${last_tag}" ]; then
+            # Bootstrap from csproj <Version> (take first 3 parts) or 1.0.0
+            raw=$(grep -oP '(?<=<Version>)[^<]+' Unfriendmaxxing.csproj | head -n1 || true)
+            if [ -n "${raw}" ]; then
+              IFS=. read -r maj min pat _ <<<"${raw}"
+              maj=${maj:-1}; min=${min:-0}; pat=${pat:-0}
+              last_tag="v${maj}.${min}.${pat}"
+              range=""
+            else
+              last_tag="v0.0.0"
+              range=""
+            fi
+            echo "No semver tag yet; baseline ${last_tag}"
+          else
+            range="${last_tag}..HEAD"
+          fi
+
+          ver="${last_tag#v}"
+          IFS=. read -r major minor patch <<<"${ver}"
+          major=${major:-0}
+          minor=${minor:-0}
+          patch=${patch:-0}
+
+          if [ -n "${range}" ]; then
+            log=$(git log ${range} --pretty=%s)
+          else
+            log=$(git log -20 --pretty=%s)
+          fi
+
+          bump="patch"
+          if echo "${log}" | grep -qiE '^(feat|feature)(\(.+\))?!:|^.+!:|BREAKING CHANGE'; then
+            bump="major"
+          elif echo "${log}" | grep -qiE '^(feat|feature)(\(.+\))?:'; then
+            bump="minor"
+          elif echo "${log}" | grep -qiE '^(fix|bugfix|perf|refactor)(\(.+\))?:'; then
+            bump="patch"
+          fi
+
+          # If HEAD is already exactly on last_tag (empty commit range), keep version
+          if [ -n "${range}" ] && [ -z "$(git log ${range} --pretty=%h)" ]; then
+            new="${major}.${minor}.${patch}"
+            echo "No new commits since ${last_tag}; reusing ${new}"
+          else
+            case "${bump}" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              patch) patch=$((patch + 1)) ;;
+            esac
+            new="${major}.${minor}.${patch}"
+            echo "Bump ${bump}: ${last_tag} -> v${new}"
+          fi
+
+          echo "version=${new}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${new}" >> "$GITHUB_OUTPUT"
+          echo "Resolved semver: v${new} (bump=${bump}, was ${last_tag})"
 
       - name: Publish Windows x64
         shell: powershell
         run: |
-          # IMPORTANT: publish the .csproj, not the .sln
-          # (solution-level -o triggers NETSDK1194 and mixed outputs)
+          $ver = "${{ steps.version.outputs.version }}"
           dotnet publish Unfriendmaxxing.csproj `
             -c Release `
             -r win-x64 `
@@ -48,7 +104,10 @@ jobs:
             -p:EnableCompressionInSingleFile=true `
             -p:PublishTrimmed=false `
             -p:AssemblyName=VRCUFM `
-            -p:InformationalVersion=${{ steps.version.outputs.version }} `
+            -p:Version=$ver `
+            -p:AssemblyVersion=$ver.0 `
+            -p:FileVersion=$ver.0 `
+            -p:InformationalVersion=$ver `
             -o ./publish
 
       - name: Prepare bundle
@@ -65,36 +124,31 @@ jobs:
 
           Get-ChildItem ./publish | Format-Table Name, Length
 
-      - name: Zip + SHA256
+      - name: Zip release
         shell: powershell
         run: |
           $zip = "./VRCUFM-win-x64.zip"
           if (Test-Path $zip) { Remove-Item $zip -Force }
           Compress-Archive -Path ./publish/* -DestinationPath $zip
+          Get-Item $zip | Format-List Name, Length
 
-          $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
-          Set-Content -Path "./VRCUFM-win-x64.zip.sha256" -Value "$hash  VRCUFM-win-x64.zip" -NoNewline
-          Write-Host "SHA256: $hash"
-
-      - name: Create/Update Release
+      - name: Create/Update GitHub Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: |
-            ./VRCUFM-win-x64.zip
-            ./VRCUFM-win-x64.zip.sha256
-          tag: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
+          artifacts: ./VRCUFM-win-x64.zip
+          tag: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
           body: |
-            Automated build from commit `${{ github.sha }}`
+            **${{ steps.version.outputs.tag }}**
 
-            **Version:** `${{ steps.version.outputs.version }}`
+            Commit: `${{ github.sha }}`
 
             **Zip (flat root):**
             - `VRCUFM.exe`
             - Native deps from publish
             - Icons when present
 
-            **Integrity:** `VRCUFM-win-x64.zip.sha256`
+            App reports this version via `InformationalVersion` (Settings / updater).
           prerelease: false
           allowUpdates: true
           makeLatest: true
