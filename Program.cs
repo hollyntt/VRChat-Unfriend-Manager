@@ -195,7 +195,7 @@ namespace VRCUFM
                 {
                     status = string.IsNullOrEmpty(config.Username)
                         ? "Please log in"
-                        : "Session expired — please log in again";
+                        : "Session expired - please log in again";
                 }
             });
 
@@ -363,16 +363,11 @@ namespace VRCUFM
 
                 await RefreshFriendRequests();
 
-                // Trust score: apply disk cache immediately, then enrich in background.
-                foreach (var f in friends)
-                    TrustScoreService.ApplyCache(f);
-                TrustScoreService.StartEnrichment(friends, id => api.FetchUserTrustProfileAsync(id));
-
                 status = $"Loaded {friends.Count} friends";
             }
             catch (Exception ex)
             {
-                status = "Session expired — please re-login";
+                status = "Session expired - please re-login";
                 isLoggedIn = false;
                 sessionRestored = false;
                 Console.WriteLine(ex.Message);
@@ -470,6 +465,8 @@ namespace VRCUFM
         {
             if (_updateChecking || _updateDownloading) return;
             _updateChecking = true;
+            checkingForUpdate = true;
+            updateAvailable = false;
             _updateStatus = "Checking for updates...";
             _updateError = null;
             _updateAvailableTag = null;
@@ -490,6 +487,7 @@ namespace VRCUFM
                 if (string.Equals(remote, local, StringComparison.OrdinalIgnoreCase))
                 {
                     _updateStatus = "Already on latest (" + tag + ")";
+                    updateAvailable = false;
                     return;
                 }
 
@@ -509,6 +507,9 @@ namespace VRCUFM
                 _updateAvailableTag = tag;
                 _updateDownloadUrl = url;
                 _updateStatus = "Update available: " + tag;
+                updateAvailable = true;
+                latestVersion = tag;
+                downloadUrl = url;
             }
             catch (Exception ex)
             {
@@ -518,6 +519,7 @@ namespace VRCUFM
             finally
             {
                 _updateChecking = false;
+                checkingForUpdate = false;
             }
         }
 
@@ -531,7 +533,9 @@ namespace VRCUFM
             }
 
             _updateDownloading = true;
+            downloading = true;
             _updateProgress = 0;
+            downloadProgress = 0;
             _updateError = null;
             _updateStatus = "Downloading...";
 
@@ -559,7 +563,7 @@ namespace VRCUFM
                     {
                         await dst.WriteAsync(buffer.AsMemory(0, n));
                         readTotal += n;
-                        if (total > 0) _updateProgress = (float)readTotal / total;
+                        if (total > 0) { _updateProgress = (float)readTotal / total; downloadProgress = _updateProgress; }
                     }
                 }
 
@@ -654,6 +658,7 @@ namespace VRCUFM
             finally
             {
                 _updateDownloading = false;
+                downloading = false;
             }
         }
         #endregion

@@ -15,7 +15,7 @@ public static class UIRenderer
 {
     static readonly string[] togetherUnits = { "min", "hr", "days" };
     static readonly string[] searchFields = { "Name", "Group" };
-    static readonly string[] sorts = { "Oldest", "Newest", "A-Z", "Z-A", "Most Time", "Least Time", "Lowest Trust", "Highest Trust" };
+    static readonly string[] sorts = { "Oldest", "Newest", "A-Z", "Z-A", "Most Time", "Least Time", "Lowest Score", "Highest Score" };
     static readonly string[] autoModes = { "Inactive Only (3+ mo)", "All Shown", "Marked Only" };
 
     static string _noteBuffer = "";
@@ -291,7 +291,7 @@ public static class UIRenderer
         if (Program.isLoggedIn)
         {
             ImGui.SameLine();
-            ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), $"  •  {Program.loggedInAs}");
+            ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), $"  -  {Program.loggedInAs}");
             ImGui.SameLine();
             float logoutW = ImGui.CalcTextSize("Logout").X + 16;
             ImGui.SetCursorPosX(sw - logoutW - ImGui.GetStyle().WindowPadding.X);
@@ -342,7 +342,7 @@ public static class UIRenderer
     {
         ImGui.Spacing();
 
-        // ── Stats Panel ──────────────────────────────────────────────────────
+        // -- Stats Panel ------------------------------------------------------
         if (Program.config.ShowStatsPanel && Program.friends.Count > 0)
         {
             var stats = FriendsManager.CalculateStats(Program.friends, Program.favorites, Program.favByGroup);
@@ -525,14 +525,7 @@ public static class UIRenderer
 
         if (ImGui.BeginChild("##list", new Vector2(-1, listH), ImGuiChildFlags.Borders))
         {
-            
-            if (TrustScoreService.IsEnriching)
-            {
-                ImGui.SameLine();
-                ImGui.TextDisabled($"  Trust {TrustScoreService.EnrichDone}/{TrustScoreService.EnrichTotal}");
-            }
-
-            ImGui.TextDisabled($"{"  ",-5}{"Name",-30} {"Trust",-6} {"Last seen",-8}  {"Together",-9}  Group");
+            ImGui.TextDisabled($"{"  ",-5}{"Name",-30} {"Score",-6} {"Last seen",-8}  {"Together",-9}  Group");
             ImGui.Separator();
 
             const float IMG_SIZE = 32f;
@@ -593,7 +586,7 @@ public static class UIRenderer
             ImGui.EndChild();
         }
 
-        // ── Notes editor (when exactly 1 selected) ───────────────────────────
+        // -- Notes editor (when exactly 1 selected) ---------------------------
         if (Program.selected.Count == 1)
         {
             int idx = Program.selected.First();
@@ -629,7 +622,7 @@ public static class UIRenderer
             File.WriteAllText($"backup_{DateTime.Now:yyyyMMdd_HHmmss}.json", JsonSerializer.Serialize(Program.shown, new JsonSerializerOptions { WriteIndented = true }));
 
         ImGui.SameLine();
-        if (ImGui.Button("Bulk ▼")) ImGui.OpenPopup("##bulk_menu");
+        if (ImGui.Button("Bulk Select")) ImGui.OpenPopup("##bulk_menu");
         if (ImGui.BeginPopup("##bulk_menu"))
         {
             var inCutoff = Program.inactiveUnit switch
@@ -651,7 +644,7 @@ public static class UIRenderer
                 FriendsManager.SelectAllLowTime(Program.shown, Program.selected, tThreshMs);
             if (ImGui.MenuItem("Select Non-Favorites"))
                 FriendsManager.SelectNonFavorites(Program.shown, Program.selected, Program.favorites);
-            if (ImGui.MenuItem("Select Low Trust (<=25)"))
+            if (ImGui.MenuItem("Select Low Score (<=25)"))
                 FriendsManager.SelectLowScore(Program.shown, Program.selected, Program.favorites, 25);
             if (ImGui.MenuItem("Invert Selection"))
                 FriendsManager.InvertSelection(Program.shown, Program.selected);
@@ -896,7 +889,7 @@ public static class UIRenderer
         bool open = true;
         if (ImGui.BeginPopupModal("##auto_confirm", ref open, ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoTitleBar))
         {
-            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), "⚠  Auto-Unfriend Scheduled Run");
+            ImGui.TextColored(new Vector4(1f, 0.4f, 0.4f, 1f), "!  Auto-Unfriend Scheduled Run");
             ImGui.Separator();
             ImGui.Spacing();
             ImGui.TextWrapped($"The scheduler is about to unfriend {Program.pendingAutoCount} friend{(Program.pendingAutoCount == 1 ? "" : "s")}.");
@@ -1013,9 +1006,9 @@ public static class UIRenderer
             ImGui.Spacing();
             ImGui.Text("VRCX Integration");
             if (VRCXDataService.IsAvailable)
-                ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "✓ VRCX database found — time together data enabled");
+                ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "[OK] VRCX database found - time together data enabled");
             else
-                ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCX.sqlite3 not found — time together will show as '-'");
+                ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCX.sqlite3 not found - time together will show as '-'");
 
             bool vrcxDesktop = Program.config.VrcxStartupDesktop;
             if (ImGui.Checkbox("Launch with VRCX (Desktop)", ref vrcxDesktop))
@@ -1039,9 +1032,9 @@ public static class UIRenderer
             ImGui.Spacing();
             ImGui.Text("VRCNext Integration");
             if (VRCNextDataService.IsAvailable)
-                ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "✓ VRCNData.db found — time together data enabled");
+                ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "[OK] VRCNData.db found - time together data enabled");
             else
-                ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCNData.db not found — time together will show as '-'");
+                ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCNData.db not found - time together will show as '-'");
 
             bool vrcNextDesktop = Program.config.VrcNextStartupDesktop;
             if (ImGui.Checkbox("Launch with VRCNext (Desktop)", ref vrcNextDesktop))
@@ -1065,20 +1058,31 @@ public static class UIRenderer
         ImGui.Text("Updates");
         ImGui.Separator();
 
-        if (ImGui.Button("Check for Updates"))
+        if (ImGui.Button("Check for Updates") && !Program.UpdateChecking && !Program.UpdateDownloading)
             _ = Task.Run(Program.CheckForUpdatesAsync);
 
-        if (Program.checkingForUpdate)
+        if (Program.UpdateChecking)
             ImGui.Text("Checking for updates...");
-        else if (Program.updateAvailable)
+        else if (!string.IsNullOrEmpty(Program.UpdateAvailableTag))
         {
-            ImGui.TextColored(new Vector4(0.3f, 1f, 0.3f, 1f), $"Update available: {Program.latestVersion}");
-            if (ImGui.Button("Download & Install Update"))
+            ImGui.TextColored(new Vector4(0.3f, 1f, 0.3f, 1f), $"Update available: {Program.UpdateAvailableTag}");
+            if (ImGui.Button("Download & Install Update") && !Program.UpdateDownloading)
                 _ = Task.Run(Program.DownloadAndInstallUpdateAsync);
         }
+        else if (!string.IsNullOrEmpty(Program.UpdateStatus))
+        {
+            ImGui.TextDisabled(Program.UpdateStatus);
+        }
 
-        if (Program.downloading)
-            ImGui.ProgressBar(Program.downloadProgress, new Vector2(-1, 20), $"Downloading... {(int)(Program.downloadProgress * 100)}%");
+        if (Program.UpdateDownloading)
+            ImGui.ProgressBar(Program.UpdateProgress, new Vector2(-1, 20), $"Downloading... {(int)(Program.UpdateProgress * 100)}%");
+
+        if (!string.IsNullOrEmpty(Program.UpdateError))
+        {
+            ImGui.TextColored(new Vector4(1f, 0.35f, 0.35f, 1f), Program.UpdateError);
+            if (ImGui.SmallButton("Dismiss"))
+                Program.ClearUpdateError();
+        }
 
         ImGui.Spacing();
         ImGui.Separator();
@@ -1208,7 +1212,7 @@ public static class UIRenderer
                 ImGui.TextColored(new Vector4(1f, 0.5f, 0.3f, 1f), "Next run: invalid date");
             }
 
-            // ── Friend-limit trigger ────────────────────────────────────────
+            // -- Friend-limit trigger ----------------------------------------
             ImGui.Spacing();
             ImGui.Separator();
             ImGui.Spacing();
@@ -1261,13 +1265,13 @@ public static class UIRenderer
                 ImGui.TextColored(barCol, $"{cur} / {Program.config.FriendLimitThreshold}");
 
                 if (ratio >= 1f)
-                    ImGui.TextColored(new Vector4(1f, 0.4f, 0.3f, 1f), "  ● At or above threshold — will trigger on next check");
+                    ImGui.TextColored(new Vector4(1f, 0.4f, 0.3f, 1f), "  * At or above threshold - will trigger on next check");
                 else
                     ImGui.TextDisabled($"  Checked every {Program.config.FriendLimitPollIntervalMinutes} minutes");
             }
         }
 
-        // ── Unfriend History ────────────────────────────────────────────────
+        // -- Unfriend History ------------------------------------------------
         ImGui.Spacing();
         ImGui.Separator();
         ImGui.Text("Unfriend History");
