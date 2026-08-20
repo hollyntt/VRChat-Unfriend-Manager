@@ -114,7 +114,7 @@ public static class FriendsManager
         return _friendNotes.TryGetValue(userId, out var n) ? n.Note : null;
     }
 
-    // ── Bulk Selection ───────────────────────────────────────────────────
+    // -- Bulk Selection ---------------------------------------------------
 
     public static void SelectAllInactive(List<SafeLimitedUserFriend> shown, HashSet<int> selected, DateTime cutoff)
     {
@@ -153,10 +153,44 @@ public static class FriendsManager
                 selected.Add(i);
     }
 
-    // ── Scoring & Stats ──────────────────────────────────────────────────
+    // -- Scoring & Stats --------------------------------------------------
 
+    /// <summary>Simple 0-100 score from favorites, activity, time together, bio, notes.</summary>
     public static int CalculateFriendScore(SafeLimitedUserFriend friend, HashSet<string> favorites)
-        => TrustScoreService.Calculate(friend);
+    {
+        int score = 0;
+
+        if (favorites != null && favorites.Contains(friend.Id))
+            score += 20;
+
+        if (!string.IsNullOrEmpty(friend.LastLogin) && DateTime.TryParse(friend.LastLogin, out var last))
+        {
+            double days = (DateTime.UtcNow - last.ToUniversalTime()).TotalDays;
+            if (days <= 1) score += 30;
+            else if (days <= 7) score += 24;
+            else if (days <= 30) score += 16;
+            else if (days <= 90) score += 8;
+            else if (days <= 365) score += 3;
+        }
+
+        double hours = friend.TimeSpentMs / 3600000.0;
+        if (hours >= 50) score += 30;
+        else if (hours >= 20) score += 22;
+        else if (hours >= 5) score += 14;
+        else if (hours >= 1) score += 8;
+        else if (hours > 0) score += 3;
+
+        if (!string.IsNullOrWhiteSpace(friend.Bio))
+            score += friend.Bio.Length >= 40 ? 10 : 4;
+
+        var note = GetNote(friend.Id);
+        if (!string.IsNullOrWhiteSpace(note))
+            score += 5;
+
+        if (score > 100) score = 100;
+        if (score < 0) score = 0;
+        return score;
+    }
 
     public static FriendStats CalculateStats(
         List<SafeLimitedUserFriend> friends,

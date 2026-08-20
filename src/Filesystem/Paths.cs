@@ -11,9 +11,6 @@ public static class Paths
     public static readonly string UnfriendLogFile = Path.Combine(AppDataFolder, "unfriend_log.json");
     public static readonly string FriendNotesFile = Path.Combine(AppDataFolder, "friend_notes.json");
 
-    /// <summary>Legacy path kept for compatibility. TrustScoreService no longer requires this.</summary>
-    public static readonly string TrustProfileCacheFile = Path.Combine(AppDataFolder, "trust_profiles.json");
-
     public static string VrcxBase => RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
         ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VRCX")
         : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VRCX");
