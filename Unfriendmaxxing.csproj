@@ -2,11 +2,15 @@
 
     <PropertyGroup>
         <OutputType>WinExe</OutputType>
+        <!-- Default = cross-platform (Linux CI restore/publish). -->
+        <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <UseWindowsForms>false</UseWindowsForms>
 
-        <!-- Version info (CI overrides with -p:Version=...) -->
+        <ApplicationIcon Condition="$([MSBuild]::IsOsPlatform('Windows'))">icon.ico</ApplicationIcon>
+
         <Version>1.0.0</Version>
         <AssemblyVersion>1.0.0.0</AssemblyVersion>
         <FileVersion>1.0.0.0</FileVersion>
@@ -15,22 +19,11 @@
         <AssemblyName>VRCUFM</AssemblyName>
         <RootNamespace>VRCUFM</RootNamespace>
     </PropertyGroup>
-
-    <!--
-      Choose TFM from the *publish RID*, not the build agent OS.
-      - win-*  (or local build with no RID on Windows) -> net10.0-windows + WinForms tray
-      - linux-* / other -> net10.0 (no WinForms)  => fixes NETSDK1136 on Ubuntu CI
-    -->
-    <PropertyGroup Condition="'$(RuntimeIdentifier)' == '' or $(RuntimeIdentifier.StartsWith('win'))">
+    
+    <PropertyGroup Condition="$([MSBuild]::IsOsPlatform('Windows'))">
         <TargetFramework>net10.0-windows</TargetFramework>
         <UseWindowsForms>true</UseWindowsForms>
         <DefineConstants>$(DefineConstants);WINDOWS_BUILD</DefineConstants>
-        <ApplicationIcon>icon.ico</ApplicationIcon>
-    </PropertyGroup>
-
-    <PropertyGroup Condition="'$(RuntimeIdentifier)' != '' and !$(RuntimeIdentifier.StartsWith('win'))">
-        <TargetFramework>net10.0</TargetFramework>
-        <UseWindowsForms>false</UseWindowsForms>
     </PropertyGroup>
 
     <ItemGroup>
