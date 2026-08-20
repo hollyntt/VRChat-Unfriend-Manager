@@ -105,9 +105,10 @@ public static class UIRenderer
 
         if (ImGui.Button("Browse..."))
         {
+#if WINDOWS_BUILD
             try
             {
-                using var dlg = new FolderBrowserDialog
+                using var dlg = new System.Windows.Forms.FolderBrowserDialog
                 {
                     Description = "Choose VRCUFM install folder",
                     UseDescriptionForTitle = true,
@@ -115,13 +116,18 @@ public static class UIRenderer
                         ? Program.setupInstallPath
                         : Paths.DefaultInstallDir
                 };
-                if (dlg.ShowDialog() == DialogResult.OK && !string.IsNullOrWhiteSpace(dlg.SelectedPath))
+                if (dlg.ShowDialog() == System.Windows.Forms.DialogResult.OK
+                    && !string.IsNullOrWhiteSpace(dlg.SelectedPath))
                     Program.setupInstallPath = dlg.SelectedPath;
             }
             catch (Exception ex)
             {
                 Program.status = "Folder dialog failed: " + ex.Message;
             }
+#else
+            // Linux / AppImage: no WinForms folder dialog - path is edited in the text field
+            Program.status = "Type or paste the install path above (Browse is Windows-only).";
+#endif
         }
         ImGui.SameLine();
         if (ImGui.Button("Use recommended"))
@@ -154,7 +160,7 @@ public static class UIRenderer
             catch (Exception ex)
             {
                 Program.status = "Install failed: " + ex.Message;
-                MessageBox.Show(ex.Message, "Install failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Program.status = "Install failed: " + ex.Message;
             }
         }
         ImGui.SameLine();
@@ -168,7 +174,7 @@ public static class UIRenderer
             }
             catch (Exception ex)
             {
-                MessageBox.Show(ex.Message, "Portable mode", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                Program.status = "Portable mode: " + ex.Message;
             }
         }
 
