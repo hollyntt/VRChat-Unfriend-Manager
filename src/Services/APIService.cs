@@ -14,7 +14,7 @@ using File = System.IO.File;
 
 namespace VRCUFM.VRChat;
 
-public class APIService
+public partial class APIService
 {
     private const string UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
     private static readonly Uri BaseUri = new("https://api.vrchat.cloud/api/1/");

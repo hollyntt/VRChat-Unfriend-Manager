@@ -233,6 +233,127 @@ public static class FriendsManager
         stats.InFavoriteGroups = groupCounts.Values.Sum();
         return stats;
     }
+
+    public static bool MatchesAutoUnfriendCriteria(SafeLimitedUserFriend f, AppConfig cfg, HashSet<string> favorites)
+    {
+        if (cfg.ExcludeFavorites && favorites != null && favorites.Contains(f.Id))
+            return false;
+
+        bool any = cfg.AutoUnfriendLowScore || cfg.AutoUnfriendInactive || cfg.AutoUnfriendLowTime;
+        if (!any) return true;
+
+        if (cfg.AutoUnfriendLowScore)
+        {
+            int score = CalculateFriendScore(f, favorites);
+            if (score > cfg.AutoUnfriendScoreMax)
+                return false;
+        }
+
+        if (cfg.AutoUnfriendInactive)
+        {
+            double days = InactiveDays(f);
+            double need = UnitToDays(cfg.AutoUnfriendInactiveValue, cfg.AutoUnfriendInactiveUnit);
+            if (days < need)
+                return false;
+        }
+
+        if (cfg.AutoUnfriendLowTime)
+        {
+            double minutes = f.TimeSpentMs / 60000.0;
+            double maxMin = UnitToMinutes(cfg.AutoUnfriendLowTimeValue, cfg.AutoUnfriendLowTimeUnit);
+            if (minutes >= maxMin)
+                return false;
+        }
+
+        return true;
+    }
+
+    public static double InactiveDays(SafeLimitedUserFriend f)
+    {
+        if (string.IsNullOrEmpty(f.LastLogin) || !DateTime.TryParse(f.LastLogin, out var last))
+            return 99999;
+        return (DateTime.UtcNow - last.ToUniversalTime()).TotalDays;
+    }
+
+    public static double UnitToDays(int value, int unitIndex) => unitIndex switch
+    {
+        0 => value,
+        1 => value * 30.0,
+        2 => value * 365.0,
+        _ => value
+    };
+
+    public static double UnitToMinutes(int value, int unitIndex) => unitIndex switch
+    {
+        0 => value,
+        1 => value * 60.0,
+        2 => value * 1440.0,
+        _ => value
+    };
+
+    public static void SelectScoreRange(List<SafeLimitedUserFriend> shown, HashSet<int> selected,
+        HashSet<string> favorites, int minScore, int maxScore)
+    {
+        selected.Clear();
+        for (int i = 0; i < shown.Count; i++)
+        {
+            int s = CalculateFriendScore(shown[i], favorites);
+            if (s >= minScore && s <= maxScore)
+                selected.Add(i);
+        }
+    }
+
+    public static void RemoveLogEntry(string userId)
+    {
+        EnsureLoaded();
+        _unfriendLog.RemoveAll(e => e.UserId == userId);
+        SaveData();
+    }
+
+    public static bool MatchesAutoGroupRule(SafeLimitedUserFriend f, AutoGroupRule rule, HashSet<string> favorites)
+    {
+        if (rule == null || !rule.Enabled) return false;
+
+        bool any = rule.UseHighScore || rule.UseLowScore || rule.UseInactive
+                   || rule.UseActive || rule.UseHighTime || rule.UseLowTime;
+        if (!any) return false;
+
+        int score = CalculateFriendScore(f, favorites);
+
+        if (rule.UseHighScore && score < rule.ScoreMin)
+            return false;
+        if (rule.UseLowScore && score > rule.ScoreMax)
+            return false;
+
+        if (rule.UseInactive)
+        {
+            double days = InactiveDays(f);
+            double need = UnitToDays(rule.InactiveValue, rule.InactiveUnit);
+            if (days < need) return false;
+        }
+
+        if (rule.UseActive)
+        {
+            double days = InactiveDays(f);
+            if (days > rule.ActiveWithinDays) return false;
+        }
+
+        if (rule.UseHighTime)
+        {
+            double minutes = f.TimeSpentMs / 60000.0;
+            double need = UnitToMinutes(rule.HighTimeValue, rule.HighTimeUnit);
+            if (minutes < need) return false;
+        }
+
+        if (rule.UseLowTime)
+        {
+            double minutes = f.TimeSpentMs / 60000.0;
+            double maxMin = UnitToMinutes(rule.LowTimeValue, rule.LowTimeUnit);
+            if (minutes >= maxMin) return false;
+        }
+
+        return true;
+    }
 }
 
 public class FriendStats

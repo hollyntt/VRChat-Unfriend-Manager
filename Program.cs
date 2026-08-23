@@ -187,9 +187,13 @@ namespace VRCUFM
                     loggedInAs = name;
                     isLoggedIn = true;
                     sessionRestored = true;
+                    _ = DiscordWebhookService.NotifyLoginAsync(loggedInAs);
+                    _ = OscNotificationService.NotifyLoginAsync(loggedInAs);
                     status = $"Welcome back, {name}";
                     await Refresh();
                     if (config.AutoUnfriendEnabled) SchedulerService.StartAutoScheduler();
+                    StartUpdateAutoCheckLoop();
+                    if (config.AutoGroupEnabled) AutoGroupService.Start();
                     if (config.AutoDeclineFriendRequests) SchedulerService.StartAutoDeclineChecker();
                 }
                 else
@@ -266,6 +270,7 @@ namespace VRCUFM
                 Raylib.EndDrawing();
             }
 
+            AutoGroupService.Stop();
             PlatformService.Cleanup();
 
             autoCts?.Cancel();
@@ -306,6 +311,8 @@ namespace VRCUFM
                         unfriendDone++;
                         FriendsManager.LogUnfriend(u, "manual");
                         ShowUnfriendToast(u.DisplayName);
+                        friends.RemoveAll(x => x.Id == u.Id);
+                        shown.RemoveAll(x => x.Id == u.Id);
                     }
                     catch (Exception ex) { Console.WriteLine(ex.Message); }
 
@@ -318,8 +325,28 @@ namespace VRCUFM
                 isUnfriending = false; isPaused = false;
                 status = unfriendDone == unfriendTotal ? "All done!" : "Cancelled";
                 ShowToast("Unfriend Complete", $"{unfriendDone} users removed");
+                _ = DiscordWebhookService.NotifyBulkUnfriendAsync(unfriendDone);
+                _ = OscNotificationService.NotifyBulkUnfriendAsync(unfriendDone);
                 selected.Clear();
-                await Refresh();
+                if (config.AutoRefreshAfterUnfriend)
+                    await Refresh();
+            }
+        }
+
+        internal static async Task ReAddFriendAsync(UnfriendLogEntry entry)
+        {
+            try
+            {
+                status = $"Sending friend request to {entry.DisplayName}...";
+                await api.SendFriendRequestAsync(entry.UserId);
+                FriendsManager.RemoveLogEntry(entry.UserId);
+                status = $"Friend request sent to {entry.DisplayName}";
+                ShowToast("Re-add", $"Request sent to {entry.DisplayName}");
+            }
+            catch (Exception ex)
+            {
+                status = "Re-add failed: " + ex.Message;
+                ShowToast("Re-add failed", ex.Message);
             }
         }
 
@@ -411,7 +438,12 @@ namespace VRCUFM
             return $"{ts.Minutes}m";
         }
 
-        internal static void ShowUnfriendToast(string displayName) => ShowToast("Unfriended", $"{displayName} has been removed.");
+        internal static void ShowUnfriendToast(string displayName)
+        {
+            ShowToast("Unfriended", $"{displayName} has been removed.");
+            _ = DiscordWebhookService.NotifyUnfriendAsync(displayName);
+            _ = OscNotificationService.NotifyUnfriendAsync(displayName);
+        }
 
         internal static void ShowToast(string title, string msg)
         {
@@ -749,6 +781,35 @@ namespace VRCUFM
         }
         #endregion
 
+
+
+        static int _updateLoopStarted = 0;
+        static void StartUpdateAutoCheckLoop()
+        {
+            if (System.Threading.Interlocked.Exchange(ref _updateLoopStarted, 1) == 1) return;
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(8000);
+                while (!shouldExit)
+                {
+                    try
+                    {
+                        if (config.AutoCheckUpdates)
+                        {
+                            await CheckForUpdatesAsync();
+                            if (config.AutoApplyUpdates
+                                && !string.IsNullOrEmpty(UpdateAvailableTag)
+                                && !UpdateDownloading)
+                            {
+                                await DownloadAndInstallUpdateAsync();
+                            }
+                        }
+                    }
+                    catch { }
+                    await Task.Delay(TimeSpan.FromHours(6));
+                }
+            });
+        }
 
         #region Configuration
 

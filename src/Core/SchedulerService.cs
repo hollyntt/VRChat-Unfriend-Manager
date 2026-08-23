@@ -93,13 +93,18 @@ public static class SchedulerService
         {
             await Program.Refresh();
 
-            List<SafeLimitedUserFriend> toUnfriend = Program.config.AutoUnfriendMode switch
+            List<SafeLimitedUserFriend> pool = Program.config.AutoUnfriendMode switch
             {
-                0 => Program.shown.Where(f => string.IsNullOrEmpty(f.LastLogin) || DateTime.Parse(f.LastLogin) < DateTime.UtcNow.AddMonths(-3)).ToList(),
+                0 => Program.friends.ToList(),
                 1 => Program.shown.ToList(),
-                2 => Program.selected.Count > 0 ? Program.selected.Where(i => i < Program.shown.Count).Select(i => Program.shown[i]).ToList() : new List<SafeLimitedUserFriend>(),
-                _ => new List<SafeLimitedUserFriend>()
+                2 => Program.selected.Count > 0
+                    ? Program.selected.Where(i => i < Program.shown.Count).Select(i => Program.shown[i]).ToList()
+                    : new List<SafeLimitedUserFriend>(),
+                _ => Program.shown.ToList()
             };
+            List<SafeLimitedUserFriend> toUnfriend = pool
+                .Where(f => FriendsManager.MatchesAutoUnfriendCriteria(f, Program.config, Program.favorites))
+                .ToList();
 
             if (toUnfriend.Count == 0)
             {
