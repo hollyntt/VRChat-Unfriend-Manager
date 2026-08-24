@@ -1,6 +1,6 @@
 using VRCUFM.Filesystem;
 
-namespace VRCUFM.Services;
+namespace VRCUFM.VRChat;
 
 public static class VRCXDataService
 {
@@ -30,7 +30,7 @@ public static class VRCXDataService
 
             while (reader.Read())
             {
-                var userId = reader.GetString(0);
+                var userId = reader.GetString(0).Replace("usr_", "", StringComparison.OrdinalIgnoreCase);
                 if (!DateTime.TryParse(reader.GetString(1), out var ts)) continue;
                 var type = reader.GetString(2);
 

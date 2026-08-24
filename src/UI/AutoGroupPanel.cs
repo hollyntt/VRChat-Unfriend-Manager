@@ -146,7 +146,7 @@ public static class AutoGroupPanel
                 string[] labels = GroupTags.Select(t =>
                 {
                     string label = Program.favGroupNames.TryGetValue(t, out var n) ? AsciiOnly(n) : t;
-                    return $"{label} ({t})";
+                    return $"{label.Replace("&", "&&")} ({t})";
                 }).ToArray();
                 ImGui.SetNextItemWidth(170);
                 if (ImGui.Combo("##grp", ref gIdx, labels, labels.Length))

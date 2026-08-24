@@ -191,8 +191,9 @@ public static class SchedulerService
                         {
                             Console.WriteLine($"[AutoDecline] Processing {requests.Count} request(s)");
 
+                            // Fetch friends locally — DON'T overwrite Program.friends
+                            // because AutoGroupService needs the TimeSpentMs data
                             var freshFriends = await Program.api.GetAllFriendsAsync();
-                            Program.friends = freshFriends;
                             var friendIds = new HashSet<string>(freshFriends.Select(f => f.Id), StringComparer.OrdinalIgnoreCase);
 
                             // Merge both time databases for best coverage
@@ -227,6 +228,13 @@ public static class SchedulerService
                             {
                                 if (token.IsCancellationRequested) break;
 
+                                // Never auto-decline hidden requests
+                                if (FriendRequestEnricher.LooksHidden(req))
+                                {
+                                    Console.WriteLine($"[AutoDecline] Skipping hidden request from {req.SenderUsername ?? req.SenderUserId ?? "unknown"}");
+                                    continue;
+                                }
+
                                 string senderId = req.SenderUserId ?? "";
                                 string senderName = req.SenderUsername ?? senderId;
 
@@ -239,6 +247,11 @@ public static class SchedulerService
                                 if (Program.config.AutoDeclineOnlyFromStrangers)
                                 {
                                     bool isKnown = await Program.api.IsKnownPlayerAsync(senderId, friendIds, timeMap, minTimeSeconds);
+                                    if (!isKnown && FriendRequestEnricher.IsKnownFromMeets(senderId))
+                                    {
+                                        Console.WriteLine($"[AutoDecline] Skipping {senderName} — met before (VRCNext)");
+                                        isKnown = true;
+                                    }
                                     if (isKnown)
                                     {
                                         Console.WriteLine($"[AutoDecline] Skipping {senderName} — known player");

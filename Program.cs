@@ -385,8 +385,11 @@ namespace VRCUFM
                         return merged;
                     });
                     foreach (var f in friends)
-                        if (timeMap.TryGetValue(f.Id, out var secs))
+                    {
+                        var normId = f.Id.Replace("usr_", "", StringComparison.OrdinalIgnoreCase);
+                        if (timeMap.TryGetValue(normId, out var secs))
                             f.TimeSpentMs = secs * 1000L;
+                    }
                 }
 
                 await RefreshFriendRequests();

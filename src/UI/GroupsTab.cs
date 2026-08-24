@@ -40,7 +40,7 @@ public static void Draw(int sw, int sh)
 
             ImGui.BeginGroup();
 
-            ImGui.TextColored(new Vector4(0.75f, 0.55f, 1f, 1f), displayName);
+            ImGui.TextColored(new Vector4(0.75f, 0.55f, 1f, 1f), displayName.Replace("&", "&&"));
             ImGui.SameLine();
             ImGui.TextDisabled($"[{tag}] ({ids.Count})");
             ImGui.SameLine();

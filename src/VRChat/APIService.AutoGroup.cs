@@ -1,6 +1,6 @@
 using VRChat.API.Model;
 
-namespace VRCUFM.Services;
+namespace VRCUFM.VRChat;
 
 public partial class APIService
 {

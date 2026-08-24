@@ -12,6 +12,9 @@ using File = System.IO.File;
 namespace VRCUFM.UI;
 public static class FriendsTab
 {
+    static string _friendsSearchLive = "";
+    static string _friendsSearchApplied = "";
+    static float _friendsSearchCd;
     static string _noteBuffer = "";
     static string _lastNoteUserId = "";
 
@@ -123,17 +126,40 @@ public static void Draw(int sw, int sh)
         }
 
 
+        // Debounced search
+        if (string.IsNullOrEmpty(_friendsSearchLive) && !string.IsNullOrEmpty(Program.searchText))
+            _friendsSearchLive = Program.searchText;
+
         ImGui.Spacing();
         ImGui.SetNextItemWidth(100f);
         ImGui.Combo("##sf", ref Program.searchField, UIShared.SearchFields, UIShared.SearchFields.Length);
         ImGui.SameLine();
         ImGui.SetNextItemWidth(sw * 0.45f);
-        ImGui.InputText("Search##sq", ref Program.searchText, 128);
-        if (!string.IsNullOrEmpty(Program.searchText))
+        ImGui.InputText("Search##sq", ref _friendsSearchLive, 128);
+        if (!string.IsNullOrEmpty(_friendsSearchLive))
         {
             ImGui.SameLine();
-            if (ImGui.SmallButton("x##clr")) Program.searchText = "";
+            if (ImGui.SmallButton("x##clr"))
+            {
+                _friendsSearchLive = "";
+                _friendsSearchApplied = "";
+                Program.searchText = "";
+                _friendsSearchCd = 0;
+            }
         }
+
+        if (_friendsSearchLive != _friendsSearchApplied)
+        {
+            _friendsSearchCd += ImGui.GetIO().DeltaTime;
+            if (_friendsSearchCd > 0.15f)
+            {
+                _friendsSearchApplied = _friendsSearchLive;
+                Program.searchText = _friendsSearchApplied;
+                _friendsSearchCd = 0;
+            }
+        }
+        else
+            _friendsSearchCd = 0;
 
         if (Program.favByGroup.Any(kv => kv.Value.Count > 0 || Program.favGroupNames.ContainsKey(kv.Key)))
         {
@@ -152,7 +178,7 @@ public static void Draw(int sw, int sh)
                     Program.SaveConfig();
                 }
                 ImGui.SameLine();
-                ImGui.Text($"{lbl} ({cnt})");
+                ImGui.Text($"{lbl.Replace("&", "&&")} ({cnt})");
                 ImGui.SameLine(0, 14);
             }
             ImGui.NewLine();
@@ -482,8 +508,7 @@ public static void Draw(int sw, int sh)
         ImGui.SameLine();
         if (ImGui.Button("Unmark All")) Program.selected.Clear();
         ImGui.SameLine();
-        if (ImGui.Button("Refresh")) _ = Program.Refresh();
-        ImGui.SameLine();
+        
         if (ImGui.Button("Backup JSON"))
             File.WriteAllText($"backup_{DateTime.Now:yyyyMMdd_HHmmss}.json", JsonSerializer.Serialize(Program.shown, new JsonSerializerOptions { WriteIndented = true }));
 

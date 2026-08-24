@@ -7,11 +7,12 @@ using Raylib_cs;
 using VRChat.API.Api;
 using VRChat.API.Client;
 using VRChat.API.Model;
+using VRCUFM.AppSystem;
+using VRCUFM.Core;
 using VRCUFM.Filesystem;
-using VRCUFM.Models;
 using File = System.IO.File;
 
-namespace VRCUFM.Services;
+namespace VRCUFM.VRChat;
 
 public partial class APIService
 {
@@ -454,11 +455,29 @@ public partial class APIService
     public async Task<List<Notification>> GetIncomingFriendRequestsAsync()
     {
         var result = new List<Notification>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        await FetchFriendRequestBatchAsync(result, seen, hidden: false);
+        await FetchFriendRequestBatchAsync(result, seen, hidden: true);
+
+        Console.WriteLine($"[FriendRequests] Found {result.Count} incoming request(s) " +
+                          $"({FriendRequestEnricher.HiddenRequestIds.Count} hidden)");
+        return result;
+    }
+
+    private async Task FetchFriendRequestBatchAsync(
+        List<Notification> result,
+        HashSet<string> seen,
+        bool hidden)
+    {
         var http = GetAuthClient();
 
         for (int offset = 0; ; offset += 100)
         {
-            var url = $"https://api.vrchat.cloud/api/1/auth/user/notifications?type=friendRequest&n=100&offset={offset}";
+            var url = $"https://api.vrchat.cloud/api/1/auth/user/notifications" +
+                      $"?type=friendRequest&n=100&offset={offset}" +
+                      (hidden ? "&hidden=true" : "");
+
             HttpResponseMessage resp;
             string body;
             try
@@ -468,13 +487,13 @@ public partial class APIService
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[FriendRequests] HTTP error at offset {offset}: {ex.Message}");
+                Console.WriteLine($"[FriendRequests] HTTP error (hidden={hidden}) offset {offset}: {ex.Message}");
                 break;
             }
 
             if (!resp.IsSuccessStatusCode)
             {
-                Console.WriteLine($"[FriendRequests] Non-success {resp.StatusCode} at offset {offset}: {body}");
+                Console.WriteLine($"[FriendRequests] Non-success {resp.StatusCode} (hidden={hidden}) offset {offset}: {body}");
                 break;
             }
 
@@ -485,36 +504,46 @@ public partial class APIService
                 page = new List<Notification>();
                 foreach (var el in doc.RootElement.EnumerateArray())
                 {
-                    var senderUserId = el.TryGetProperty("senderUserId", out var suidP) ? suidP.GetString() : null;
+                    var senderUserId = el.TryGetProperty("senderUserId", out var suidP)
+                        ? suidP.GetString() : null;
                     if (string.IsNullOrEmpty(senderUserId) || senderUserId == CurrentUserId)
                         continue;
 
+                    var id = el.TryGetProperty("id", out var idP)
+                        ? idP.GetString() ?? "" : "";
+
                     var n = new Notification(
-                        id: el.TryGetProperty("id", out var idP) ? idP.GetString() ?? "" : "",
+                        id: id,
                         senderUserId: senderUserId,
-                        senderUsername: el.TryGetProperty("senderUsername", out var sunP) ? sunP.GetString() : null,
+                        senderUsername: el.TryGetProperty("senderUsername", out var sunP)
+                            ? sunP.GetString() : null,
                         type: NotificationType.FriendRequest,
-                        message: el.TryGetProperty("message", out var msgP) ? msgP.GetString() ?? "" : "",
+                        message: el.TryGetProperty("message", out var msgP)
+                            ? msgP.GetString() ?? "" : "",
                         details: "",
                         seen: false,
-                        createdAt: el.TryGetProperty("createdAt", out var caP) && DateTime.TryParse(caP.GetString(), out var dt) ? dt : DateTime.UtcNow
+                        createdAt: el.TryGetProperty("createdAt", out var caP)
+                            && DateTime.TryParse(caP.GetString(), out var dt) ? dt : DateTime.UtcNow
                     );
 
-                    page.Add(n);
+                    if (hidden)
+                        FriendRequestEnricher.HiddenRequestIds.Add(id);
+                    else if (el.TryGetProperty("hidden", out var hidP) && hidP.GetBoolean())
+                        FriendRequestEnricher.HiddenRequestIds.Add(id);
+
+                    if (seen.Add(id))
+                        page.Add(n);
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[FriendRequests] Parse error at offset {offset}: {ex.Message}");
+                Console.WriteLine($"[FriendRequests] Parse error (hidden={hidden}) offset {offset}: {ex.Message}");
                 break;
             }
 
             result.AddRange(page);
             if (page.Count < 100) break;
         }
-
-        Console.WriteLine($"[FriendRequests] Found {result.Count} incoming request(s)");
-        return result;
     }
 
     public async Task DeclineFriendRequestAsync(string notificationId)

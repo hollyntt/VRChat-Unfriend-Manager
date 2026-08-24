@@ -1,6 +1,6 @@
 using VRCUFM.Filesystem;
 
-namespace VRCUFM.Services;
+namespace VRCUFM.VRChat;
 
 public static class VRCNextDataService
 {
@@ -28,7 +28,7 @@ public static class VRCNextDataService
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
-                var userId = reader.GetString(0);
+                var userId = reader.GetString(0).Replace("usr_", "", StringComparison.OrdinalIgnoreCase);
                 var secs   = reader.GetInt64(1);
                 result.TryGetValue(userId, out var existing);
                 result[userId] = existing + secs;

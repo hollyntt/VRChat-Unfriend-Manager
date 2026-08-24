@@ -2,7 +2,7 @@ using System.Net;
 using Raylib_cs;
 using Image = Raylib_cs.Image;
 
-namespace VRCUFM.Services;
+namespace VRCUFM.AppSystem;
 
 public static class TextureCache
 {

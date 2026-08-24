@@ -1,4 +1,4 @@
-namespace VRCUFM.Models;
+namespace VRCUFM.AppSystem;
 
 public class AppConfig
 {
