@@ -17,6 +17,7 @@ public static class FriendsTab
     static float _friendsSearchCd;
     static string _noteBuffer = "";
     static string _lastNoteUserId = "";
+    static bool _openUnfriendConfirm;
 
 public static void Draw(int sw, int sh)
     {
@@ -447,7 +448,7 @@ public static void Draw(int sw, int sh)
                     {
                         Program.selected.Clear();
                         Program.selected.Add(i);
-                        ImGui.OpenPopup("##confirm_unfriend");
+                        _openUnfriendConfirm = true; // open modal next frame (can't open modal from inside context popup)
                     }
 
                     ImGui.EndPopup();
@@ -558,6 +559,13 @@ public static void Draw(int sw, int sh)
             else if (Program.selected.Count > 0) ImGui.OpenPopup("##confirm_unfriend");
         }
         if (!canUnfriend) ImGui.EndDisabled();
+
+        // Context menu can't open a modal while still active — defer to next frame
+        if (_openUnfriendConfirm)
+        {
+            _openUnfriendConfirm = false;
+            ImGui.OpenPopup("##confirm_unfriend");
+        }
 
         if (ImGui.BeginPopupModal("##confirm_unfriend", ImGuiWindowFlags.AlwaysAutoResize))
         {

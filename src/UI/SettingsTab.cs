@@ -433,17 +433,24 @@ public static void Draw()
             ImGui.BeginChild("##unfriend_hist", new Vector2(-1, histH), ImGuiChildFlags.Borders);
             ImGui.TextDisabled($"{"Name",-28} {"Date",-14} {"Reason",-10} {"Time Before",-12}");
             ImGui.Separator();
+
+            int i = 0;
             foreach (var entry in log.OrderByDescending(e => e.UnfriendedAt).Take(50))
             {
+                ImGui.PushID(i++);                       // ← makes every row unique
+
                 var dt = entry.UnfriendedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
                 var time = Program.FormatTimeSpent(entry.TimeSpentMsBefore);
+
                 ImGui.Text($"{entry.DisplayName,-22} {dt,-14} {entry.Reason,-8} {time,-10}");
                 ImGui.SameLine();
-                if (ImGui.SmallButton("Re-add##" + entry.UserId))
+                if (ImGui.SmallButton("Re-add"))          // ← plain label is now safe
                 {
                     var e = entry;
                     _ = Task.Run(() => Program.ReAddFriendAsync(e));
                 }
+
+                ImGui.PopID();
             }
             ImGui.EndChild();
         }
