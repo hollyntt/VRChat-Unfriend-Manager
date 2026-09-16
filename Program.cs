@@ -58,8 +58,8 @@ namespace VRCUFM
         internal static string searchText = "";
         internal static int searchField = 0;
         internal static int sort = 0;
-        internal static string status = "Starting up...";
-        internal static bool working = false;
+        internal static volatile string status = "Starting up...";
+        internal static volatile bool working = false;
         internal static bool isUnfriending = false;
         internal static volatile bool pendingAutoConfirm = false;
         internal static volatile int pendingAutoCount = 0;
@@ -74,10 +74,10 @@ namespace VRCUFM
         internal static CancellationTokenSource? autoCts;
         internal static CancellationTokenSource? autoDeclineCts;
         internal static readonly string[] units = { "Days", "Months", "Years" };
-        internal static bool isLoggedIn = false;
+        internal static volatile bool isLoggedIn = false;
         internal static bool needsSetup = false;
         internal static string setupInstallPath = "";
-        internal static bool sessionRestored = false;
+        internal static volatile bool sessionRestored = false;
         internal static bool shouldExit = false;
 
         internal static List<Notification> incomingFriendRequests = new();

@@ -354,33 +354,90 @@ public partial class APIService
 
         for (int offset = 0; ; offset += 100)
         {
-            var page = await Friends.GetFriendsAsync(offset: offset, n: 100, offline: false);
+            var page = await GetFriendsPageRawAsync(offset, offline: false);
             foreach (var u in page)
             {
-                if (seen.Add(u.Id)) list.Add(MapFriend(u));
+                if (seen.Add(u.Id)) list.Add(u);
             }
+
             if (page.Count < 100) break;
         }
+
         for (int offset = 0; ; offset += 100)
         {
-            var page = await Friends.GetFriendsAsync(offset: offset, n: 100, offline: true);
+            var page = await GetFriendsPageRawAsync(offset, offline: true);
             foreach (var u in page)
             {
-                if (seen.Add(u.Id)) list.Add(MapFriend(u));
+                if (seen.Add(u.Id)) list.Add(u);
             }
+
             if (page.Count < 100) break;
         }
+
         return list;
     }
 
-    private static SafeLimitedUserFriend MapFriend(LimitedUserFriend u) => new()
+    // The generated VRChat.API model currently marks imageUrl as required.
+    // VRChat can return friend records without imageUrl, which makes the SDK
+    // fail before we can use the fields this app actually needs. Parse the
+    // response ourselves so optional/missing fields do not break the entire
+    // friends list.
+    private async Task<List<SafeLimitedUserFriend>> GetFriendsPageRawAsync(int offset, bool offline)
     {
-        Id = u.Id,
-        DisplayName = u.DisplayName ?? "Unknown",
-        LastLogin = u.LastLogin?.ToString("o") ?? "",
-        ThumbnailUrl = u.CurrentAvatarThumbnailImageUrl ?? u.CurrentAvatarImageUrl ?? u.ProfilePicOverrideThumbnail ?? u.ProfilePicOverride ?? "",
-        Bio = u.Bio ?? "",
-    };
+        var url = $"{BaseUri}auth/user/friends?offset={offset}&n=100&offline={offline.ToString().ToLowerInvariant()}&v=2";
+        var response = await GetAuthClient().GetAsync(url);
+        var body = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+            throw new HttpRequestException($"GetFriends failed: {(int)response.StatusCode} {response.StatusCode}: {body}");
+
+        using var doc = JsonDocument.Parse(body);
+        if (doc.RootElement.ValueKind != JsonValueKind.Array)
+            throw new JsonException("VRChat friends response was not an array.");
+
+        var result = new List<SafeLimitedUserFriend>();
+
+        foreach (var item in doc.RootElement.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                continue;
+
+            var id = GetOptionalString(item, "id");
+            if (string.IsNullOrWhiteSpace(id))
+                continue;
+
+            result.Add(new SafeLimitedUserFriend
+            {
+                Id = id,
+                DisplayName = GetOptionalString(item, "displayName")
+                    ?? GetOptionalString(item, "username")
+                    ?? "Unknown",
+                LastLogin = GetOptionalString(item, "last_login")
+                    ?? GetOptionalString(item, "lastLogin")
+                    ?? "",
+                ThumbnailUrl = GetOptionalString(item, "iconUrl")
+                    ?? GetOptionalString(item, "currentAvatarThumbnailImageUrl")
+                    ?? GetOptionalString(item, "currentAvatarImageUrl")
+                    ?? GetOptionalString(item, "profilePicOverrideThumbnail")
+                    ?? GetOptionalString(item, "profilePicOverride")
+                    ?? GetOptionalString(item, "imageUrl")
+                    ?? "",
+                Bio = GetOptionalString(item, "bio") ?? "",
+            });
+        }
+
+        return result;
+    }
+
+    private static string? GetOptionalString(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var value))
+            return null;
+
+        return value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+    }
     public async Task<(HashSet<string> allIds, Dictionary<string, HashSet<string>> byGroup)> GetFavoritesDetailedAsync()
     {
         var allIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

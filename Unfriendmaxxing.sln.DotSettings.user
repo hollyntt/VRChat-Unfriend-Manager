@@ -43,6 +43,7 @@
 	<s:String x:Key="/Default/CodeInspection/ExcludedFiles/FilesAndFoldersToSkip2/=7020124F_002D9FFC_002D4AC3_002D8F3D_002DAAB8E0240759_002Ff_003ATwoFactorAuthCode_002Ecs_002Fl_003AC_0021_003FUsers_003Fsoap_003FAppData_003FRoaming_003FJetBrains_003FRider2025_002E2_003Fresharper_002Dhost_003FSourcesCache_003F68abb3ede93445fccee3ac4a4fc191adecf8f6f6a29d525e747fea0bc367f_003FTwoFactorAuthCode_002Ecs/@EntryIndexedValue">ForceIncluded</s:String>
 	<s:String x:Key="/Default/Environment/AssemblyExplorer/XmlDocument/@EntryValue">&lt;AssemblyExplorer&gt;&#xD;
   &lt;Assembly Path="C:\Users\soap\.nuget\packages\vrchat.api\1.20.4\lib\netstandard2.0\VRChat.API.dll" /&gt;&#xD;
+  &lt;Assembly Path="C:\Users\Hollyn\.nuget\packages\vrchat.api\2.20.9\lib\net8.0\VRChat.API.dll" /&gt;&#xD;
 &lt;/AssemblyExplorer&gt;</s:String>
 	<s:Boolean x:Key="/Default/ResxEditorPersonal/CheckedGroups/=Unfriendmaxxing_002Ficon/@EntryIndexedValue">False</s:Boolean>
 	<s:Boolean x:Key="/Default/ResxEditorPersonal/CheckedGroups/=Unfriendmaxxing_002Ficon/@EntryIndexRemoved">True</s:Boolean>
