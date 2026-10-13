@@ -53,6 +53,8 @@ public static class AutoGroupPanel
         if (!Program.config.AutoGroupEnabled)
             return;
 
+        ImGui.TextDisabled($"Last run: {AutoGroupService.LastRunStatus}");
+
         ImGui.SameLine();
         ImGui.TextDisabled("Every");
         ImGui.SameLine();
@@ -170,6 +172,13 @@ public static class AutoGroupPanel
                 }
                 else
                 {
+                    if (!rule.UseHighScore && !rule.UseLowScore && !rule.UseInactive &&
+                        !rule.UseActive && !rule.UseHighTime && !rule.UseLowTime)
+                    {
+                        ImGui.TextColored(new Vector4(1f, 0.65f, 0.3f, 1f),
+                            "No filters selected: this rule currently matches no friends.");
+                    }
+
                     if (act == "add")
                     {
                         bool skip = rule.SkipIfAlreadyFavorited;

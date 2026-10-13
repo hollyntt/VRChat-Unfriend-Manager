@@ -8,6 +8,8 @@ namespace VRCUFM.Core;
 internal static class LinuxTrayService
 {
     private static readonly string SocketPath = Path.Combine(Path.GetTempPath(), $"vum_tray_{Environment.ProcessId}.sock");
+    private static readonly string IconDirectoryPath = Path.Combine(Path.GetTempPath(), $"vrcufm-tray-{Environment.ProcessId}");
+    private const string ScriptPrefix = "vum_tray_";
     private static Process? _process;
     private static Socket? _socket;
     private static Thread? _listenerThread;
@@ -18,10 +20,11 @@ internal static class LinuxTrayService
 
         string scriptPath = Path.Combine(Path.GetTempPath(), $"vum_tray_{Environment.ProcessId}.py");
         string? iconPath = FindIconPath();
-        string script = CreateHelperScript(SocketPath, iconPath ?? "");
+        string script = CreateHelperScript(SocketPath, iconPath ?? "", IconDirectoryPath);
 
         try
         {
+            CleanupStaleTrayResources();
             File.WriteAllText(scriptPath, script);
             if (File.Exists(SocketPath)) File.Delete(SocketPath);
 
@@ -84,6 +87,8 @@ internal static class LinuxTrayService
             _listenerThread = null;
             try { File.Delete(scriptPath); } catch (IOException ex) { Console.WriteLine($"[TRAY] Could not remove helper script: {ex.Message}"); }
             try { File.Delete(SocketPath); } catch (IOException ex) { Console.WriteLine($"[TRAY] Could not remove tray socket: {ex.Message}"); }
+            try { if (Directory.Exists(IconDirectoryPath)) Directory.Delete(IconDirectoryPath, true); }
+            catch (IOException ex) { Console.WriteLine($"[TRAY] Could not remove tray icon directory: {ex.Message}"); }
         }
     }
 
@@ -140,15 +145,148 @@ internal static class LinuxTrayService
         return possibleIcons.FirstOrDefault(File.Exists);
     }
 
-    private static string CreateHelperScript(string socketPath, string iconPath)
+    private static void CleanupStaleTrayResources()
+    {
+        string tempDirectory = Path.GetTempPath();
+        var activeScripts = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (string scriptPath in Directory.EnumerateFiles(tempDirectory, $"{ScriptPrefix}*.py"))
+        {
+            if (!TryGetOwningProcessId(scriptPath, out int processId))
+                continue;
+
+            if (processId == Environment.ProcessId)
+            {
+                StopOrphanedHelper(scriptPath);
+                DeleteStaleFile(scriptPath);
+                DeleteStaleFile(Path.ChangeExtension(scriptPath, ".sock"));
+                continue;
+            }
+
+            if (IsProcessRunning(processId))
+            {
+                activeScripts.Add(Path.GetFullPath(scriptPath));
+                continue;
+            }
+
+            if (!StopOrphanedHelper(scriptPath))
+            {
+                activeScripts.Add(Path.GetFullPath(scriptPath));
+                continue;
+            }
+
+            DeleteStaleFile(scriptPath);
+            DeleteStaleFile(Path.ChangeExtension(scriptPath, ".sock"));
+        }
+
+        foreach (string socketPath in Directory.EnumerateFiles(tempDirectory, $"{ScriptPrefix}*.sock"))
+        {
+            if (TryGetOwningProcessId(socketPath, out int processId) && !IsProcessRunning(processId))
+                DeleteStaleFile(socketPath);
+        }
+
+        foreach (string iconDirectory in Directory.EnumerateDirectories(tempDirectory, "vrcufm-tray-*"))
+        {
+            string suffix = Path.GetFileName(iconDirectory)["vrcufm-tray-".Length..];
+            if (int.TryParse(suffix, out int processId))
+            {
+                if (IsProcessRunning(processId)) continue;
+            }
+            else if (activeScripts.Count > 0)
+            {
+                continue;
+            }
+
+            try { Directory.Delete(iconDirectory, true); }
+            catch (IOException ex) { Console.WriteLine($"[TRAY] Could not remove stale tray icon directory: {ex.Message}"); }
+        }
+    }
+
+    private static bool TryGetOwningProcessId(string resourcePath, out int processId)
+    {
+        string name = Path.GetFileNameWithoutExtension(resourcePath);
+        if (name.StartsWith(ScriptPrefix, StringComparison.Ordinal) &&
+            int.TryParse(name.AsSpan(ScriptPrefix.Length), out processId))
+            return true;
+
+        processId = 0;
+        return false;
+    }
+
+    private static bool IsProcessRunning(int processId)
+    {
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static bool StopOrphanedHelper(string scriptPath)
+    {
+        if (!Directory.Exists("/proc")) return true;
+
+        string fullScriptPath = Path.GetFullPath(scriptPath);
+        foreach (string processDirectory in Directory.EnumerateDirectories("/proc"))
+        {
+            string processIdText = Path.GetFileName(processDirectory);
+            if (!int.TryParse(processIdText, out int processId) || processId == Environment.ProcessId)
+                continue;
+
+            try
+            {
+                string[] arguments = File.ReadAllText(Path.Combine(processDirectory, "cmdline"))
+                    .Split('\0', StringSplitOptions.RemoveEmptyEntries);
+                if (!arguments.Any(argument => string.Equals(argument, fullScriptPath, StringComparison.Ordinal)))
+                    continue;
+
+                using Process process = Process.GetProcessById(processId);
+                process.Kill();
+                if (!process.WaitForExit(3000))
+                {
+                    Console.WriteLine($"[TRAY] Orphaned helper process {processId} did not stop promptly.");
+                    return false;
+                }
+                return true;
+            }
+            catch (FileNotFoundException) { }
+            catch (DirectoryNotFoundException) { }
+            catch (InvalidOperationException) { }
+            catch (System.ComponentModel.Win32Exception ex)
+            {
+                Console.WriteLine($"[TRAY] Could not stop orphaned helper process: {ex.Message}");
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static void DeleteStaleFile(string path)
+    {
+        try { if (File.Exists(path)) File.Delete(path); }
+        catch (IOException ex) { Console.WriteLine($"[TRAY] Could not remove stale tray file '{path}': {ex.Message}"); }
+    }
+
+    private static string CreateHelperScript(string socketPath, string iconPath, string iconDirectoryPath)
     {
         string pySocketPath = JsonSerializer.Serialize(socketPath);
         string pyIconPath = JsonSerializer.Serialize(iconPath);
+        string pyIconDirectoryPath = JsonSerializer.Serialize(iconDirectoryPath);
         return $$"""
-            import os, shutil, socket, sys, tempfile
+            import os, shutil, socket, sys
 
             SOCK = {{pySocketPath}}
             ICON = {{pyIconPath}}
+            ICON_DIRECTORY = {{pyIconDirectoryPath}}
             TITLE = 'VRChat Unfriend Manager'
 
             def send_command(command):
@@ -191,7 +329,8 @@ internal static class LinuxTrayService
                 send_command('ready')
                 pystray.Icon('vrcufm', image, TITLE, menu).run()
             else:
-                icon_directory = tempfile.mkdtemp(prefix='vrcufm-tray-')
+                icon_directory = ICON_DIRECTORY
+                os.makedirs(icon_directory, exist_ok=True)
                 try:
                     icon_name = 'vrcufm'
                     if ICON and os.path.exists(ICON):

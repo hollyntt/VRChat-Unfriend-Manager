@@ -103,6 +103,7 @@ public static void Draw()
                     }
                     await Program.Refresh();
                     if (Program.config.AutoDeclineFriendRequests) SchedulerService.StartAutoDeclineChecker();
+                    if (Program.config.AutoGroupEnabled) AutoGroupService.Start();
                     Program.status = $"Logged in as {name}";
                 }
                 else Program.status = error ?? "Login failed";

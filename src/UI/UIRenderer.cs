@@ -72,6 +72,7 @@ public static class UIRenderer
             Program.incomingFriendRequests.Clear();
             Program.autoDeclineCts?.Cancel();
             Program.autoDeclineCts = null;
+            AutoGroupService.Stop();
             Program.loggedInAs = ""; Program.isLoggedIn = false; Program.sessionRestored = false;
             Program.user = ""; Program.pass = "";
             Program.status = "Logged out";

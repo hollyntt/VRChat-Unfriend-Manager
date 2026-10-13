@@ -1,4 +1,5 @@
 using VRChat.API.Model;
+using VRChat.API.Client;
 
 namespace VRCUFM.VRChat;
 
@@ -71,10 +72,19 @@ public partial class APIService
         if (string.IsNullOrEmpty(CurrentUserId))
             throw new InvalidOperationException("Not logged in");
 
-        await Favorites.ClearFavoriteGroupAsync(
-            FavoriteType.Friend,
-            groupTag,
-            CurrentUserId);
+        try
+        {
+            await Favorites.ClearFavoriteGroupAsync(
+                FavoriteType.Friend,
+                groupTag,
+                CurrentUserId);
+        }
+        catch (ApiException ex) when (
+            ex.ErrorCode == 404 &&
+            ex.ErrorContent?.ToString()?.Contains("favorites not found", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            Console.WriteLine($"[AutoGroup] Favorite group {groupTag} is already empty.");
+        }
     }
 
     /// <summary>Remove every friend favorite across all groups.</summary>

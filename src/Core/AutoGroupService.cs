@@ -7,6 +7,7 @@ public static class AutoGroupService
 {
     static CancellationTokenSource? _cts;
     static int _running;
+    public static volatile string LastRunStatus = "Not run yet";
 
     public static void Start()
     {
@@ -37,15 +38,36 @@ public static class AutoGroupService
 
     public static async Task RunOnceAsync(CancellationToken token = default)
     {
-        if (System.Threading.Interlocked.Exchange(ref _running, 1) == 1) return;
+        if (System.Threading.Interlocked.Exchange(ref _running, 1) == 1)
+        {
+            LastRunStatus = "A grouping run is already in progress.";
+            return;
+        }
+
         try
         {
-            if (!Program.isLoggedIn) return;
+            if (!Program.isLoggedIn)
+            {
+                LastRunStatus = "Skipped: log in before running grouping rules.";
+                return;
+            }
+
             var rules = (Program.config.AutoGroupRules ?? new List<AutoGroupRule>())
                 .Where(r => r != null && r.Enabled).ToList();
-            if (rules.Count == 0) return;
+            if (rules.Count == 0)
+            {
+                LastRunStatus = "No enabled grouping rules.";
+                return;
+            }
 
             int added = 0, removed = 0, moved = 0, cleared = 0;
+            int matchedFriends = 0, skippedFriends = 0, failedActions = 0;
+            int rulesWithoutCriteria = rules.Count(rule =>
+                !string.Equals(rule.Action?.Trim(), "clear_all", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(rule.Action?.Trim(), "clear_group", StringComparison.OrdinalIgnoreCase) &&
+                !rule.UseHighScore && !rule.UseLowScore && !rule.UseInactive &&
+                !rule.UseActive && !rule.UseHighTime && !rule.UseLowTime);
+            LastRunStatus = $"Checking {Program.friends.Count} friends against {rules.Count} enabled rules...";
 
             // Group-level actions first (clear_group / clear_all) — ignore per-friend criteria
             foreach (var rule in rules)
@@ -64,6 +86,7 @@ public static class AutoGroupService
                     }
                     catch (Exception ex)
                     {
+                        failedActions++;
                         Console.WriteLine($"[AutoGroup] clear_all failed: {ex.Message}");
                     }
                     continue;
@@ -81,6 +104,7 @@ public static class AutoGroupService
                     }
                     catch (Exception ex)
                     {
+                        failedActions++;
                         Console.WriteLine($"[AutoGroup] clear_group failed: {ex.Message}");
                     }
                     continue;
@@ -104,6 +128,7 @@ public static class AutoGroupService
                     if (!FriendsManager.MatchesAutoGroupRule(friend, rule, Program.favorites))
                         continue;
 
+                    matchedFriends++;
                     string tag = string.IsNullOrWhiteSpace(rule.TargetGroupTag) ? "group_0" : rule.TargetGroupTag.Trim();
                     bool isFav = allIds.Contains(friend.Id);
                     bool alreadyInTarget = byGroup.TryGetValue(tag, out var set) && set.Contains(friend.Id);
@@ -112,7 +137,11 @@ public static class AutoGroupService
                     {
                         if (action == "unfavorite")
                         {
-                            if (!isFav) break;
+                            if (!isFav)
+                            {
+                                skippedFriends++;
+                                break;
+                            }
                             await Program.api.RemoveFriendFavoriteAsync(friend.Id);
                             allIds.Remove(friend.Id);
                             foreach (var kv in byGroup.Values) kv.Remove(friend.Id);
@@ -122,7 +151,11 @@ public static class AutoGroupService
                         }
                         else if (action == "move")
                         {
-                            if (alreadyInTarget) break;
+                            if (alreadyInTarget)
+                            {
+                                skippedFriends++;
+                                break;
+                            }
                             if (isFav)
                             {
                                 await Program.api.RemoveFriendFavoriteAsync(friend.Id);
@@ -141,8 +174,11 @@ public static class AutoGroupService
                         }
                         else // add
                         {
-                            if (alreadyInTarget) break;
-                            if (rule.SkipIfAlreadyFavorited && isFav) break;
+                            if (alreadyInTarget || (rule.SkipIfAlreadyFavorited && isFav))
+                            {
+                                skippedFriends++;
+                                break;
+                            }
 
                             await Program.api.AddFriendFavoriteAsync(friend.Id, tag);
                             allIds.Add(friend.Id);
@@ -156,6 +192,7 @@ public static class AutoGroupService
                     }
                     catch (Exception ex)
                     {
+                        failedActions++;
                         Console.WriteLine($"[AutoGroup] Failed {friend.DisplayName}: {ex.Message}");
                     }
                     break;
@@ -166,19 +203,35 @@ public static class AutoGroupService
             Program.favByGroup = byGroup;
 
             int total = added + removed + moved + cleared;
+            var changeParts = new List<string>();
             if (total > 0)
             {
-                var parts = new List<string>();
-                if (added > 0) parts.Add($"{added} added");
-                if (moved > 0) parts.Add($"{moved} moved");
-                if (removed > 0) parts.Add($"{removed} unfavorited");
-                if (cleared > 0) parts.Add($"{cleared} group clear(s)");
-                var msg = string.Join(", ", parts);
-                Program.ShowToast("Auto-Group", msg);
-                Program.status = "Auto-Group: " + msg;
-                _ = DiscordWebhookService.NotifyAutoGroupAsync(msg);
-                _ = OscNotificationService.NotifyAutoGroupAsync(msg);
+                if (added > 0) changeParts.Add($"{added} added");
+                if (moved > 0) changeParts.Add($"{moved} moved");
+                if (removed > 0) changeParts.Add($"{removed} unfavorited");
+                if (cleared > 0) changeParts.Add($"{cleared} group clear(s)");
             }
+            string changeSummary = total > 0 ? string.Join(", ", changeParts) : "no changes";
+            var summaryParts = new List<string> { changeSummary, $"{matchedFriends} matched" };
+            if (skippedFriends > 0) summaryParts.Add($"{skippedFriends} already satisfied");
+            if (failedActions > 0) summaryParts.Add($"{failedActions} failed");
+            LastRunStatus = string.Join(", ", summaryParts);
+
+            if (matchedFriends == 0 && rulesWithoutCriteria > 0)
+                LastRunStatus += $". {rulesWithoutCriteria} enabled rule(s) have no filters selected.";
+
+            if (total > 0)
+            {
+                Program.ShowToast("Auto-Group", changeSummary);
+                Program.status = "Auto-Group: " + changeSummary;
+                _ = DiscordWebhookService.NotifyAutoGroupAsync(changeSummary);
+                _ = OscNotificationService.NotifyAutoGroupAsync(changeSummary);
+            }
+        }
+        catch (Exception ex)
+        {
+            LastRunStatus = $"Run failed: {ex.Message}";
+            Console.WriteLine("[AutoGroup] Run failed: " + ex);
         }
         finally
         {
