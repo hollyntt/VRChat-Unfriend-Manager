@@ -8,11 +8,6 @@ using VRCUFM.AppSystem;
 using VRCUFM.Filesystem;
 using File = System.IO.File;
 
-#if WINDOWS_BUILD
-using System.Drawing;
-using System.Windows.Forms;
-#endif
-
 namespace VRCUFM.Core;
 
 public static class PlatformService
@@ -23,14 +18,9 @@ public static class PlatformService
     public static bool ShowRequested = false;
     private static bool _trayRunning = false;
     private static Thread? _trayThread;
-#if WINDOWS_BUILD
-    private static NotifyIcon? _notifyIcon;
-#endif
     private static readonly object _trayLock = new();
-    private static Process? _linuxTrayProcess;
-    private static System.Net.Sockets.Socket? _linuxTraySocket;
-    private static Thread? _linuxTrayListenerThread;
-    private static string _linuxSocketPath = Path.Combine(Path.GetTempPath(), $"vum_tray_{Environment.ProcessId}.sock");
+    internal static bool TrayRunning => _trayRunning;
+    public static volatile string TrayStatus = "Disabled";
 
     private static IntPtr _originalWndProc = IntPtr.Zero;
     private static GCHandle? _wndProcHandle;
@@ -121,20 +111,30 @@ public static class PlatformService
             if (_trayRunning) return;
             _trayThread?.Join(3000);
             _trayThread = null;
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) &&
+                !RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+                return;
             _trayRunning = true;
+            TrayStatus = "Starting tray icon...";
+            Action runTray;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+#if WINDOWS_BUILD
+                runTray = () => WindowsTrayService.Run(autostart);
+#else
+                _trayRunning = false;
+                return;
+#endif
+            }
+            else
+            {
+                runTray = () => LinuxTrayService.Run(autostart);
+            }
+
             _trayThread = new Thread(() =>
             {
-                if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-                {
-#if WINDOWS_BUILD
-                    RunWindowsTray(autostart);
-#endif
-                }
-                else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
-                {
-                    RunLinuxTray(autostart);
-                }
-                _trayRunning = false;
+                try { runTray(); }
+                finally { _trayRunning = false; }
             });
             _trayThread.IsBackground = true;
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -148,222 +148,20 @@ public static class PlatformService
         lock (_trayLock)
         {
             _trayRunning = false;
-
-#if WINDOWS_BUILD
-            if (_notifyIcon != null)
+            TrayStatus = "Disabled";
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                try
-                {
-                    _notifyIcon.Visible = false;
-                    _notifyIcon.Dispose();
-                    _notifyIcon = null;
-                }
-                catch { }
-            }
+#if WINDOWS_BUILD
+                WindowsTrayService.Stop();
 #endif
-
-            try { _linuxTrayProcess?.Kill(); } catch { }
-            _linuxTrayProcess = null;
-
-            try { _linuxTraySocket?.Close(); } catch { }
-            _linuxTraySocket = null;
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                LinuxTrayService.Stop();
+            }
 
             _trayThread?.Join(3000);
             _trayThread = null;
-        }
-    }
-
-#if WINDOWS_BUILD
-    static Icon LoadTrayIcon()
-    {
-        string exeDir = AppDomain.CurrentDomain.BaseDirectory;
-        var possibleIcons = new[]
-        {
-            Path.Combine(exeDir, "icon.ico"),
-            Path.Combine(exeDir, "icon.png"),
-            Path.Combine(Directory.GetCurrentDirectory(), "icon.ico"),
-            Path.Combine(Directory.GetCurrentDirectory(), "icon.png")
-        };
-
-        foreach (var path in possibleIcons)
-        {
-            if (File.Exists(path))
-            {
-                try
-                {
-                    if (path.EndsWith(".ico", StringComparison.OrdinalIgnoreCase))
-                        return new Icon(path);
-
-                    using var bmp = new Bitmap(path);
-                    return Icon.FromHandle(bmp.GetHicon());
-                }
-                catch { }
-            }
-        }
-        return SystemIcons.Application;
-    }
-
-    static void RunWindowsTray(bool autostart)
-    {
-        if (autostart) HideMainWindow();
-
-        try
-        {
-            ApplicationConfiguration.Initialize();
-
-            var icon = LoadTrayIcon();
-
-            _notifyIcon = new NotifyIcon
-            {
-                Icon = icon,
-                Text = "VRChat Unfriend Manager",
-                Visible = true,
-            };
-
-            var menu = new ContextMenuStrip();
-            menu.Items.Add("Show", null, (_, _) => ShowMainWindow());
-            menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("Exit", null, (_, _) => { Program.shouldExit = true; Application.ExitThread(); });
-
-            _notifyIcon.ContextMenuStrip = menu;
-            _notifyIcon.DoubleClick += (_, _) => ShowMainWindow();
-
-            Console.WriteLine("[TRAY] NotifyIcon created successfully");
-
-            Application.Run();
-
-            _notifyIcon.Visible = false;
-            _notifyIcon.Dispose();
-            _notifyIcon = null;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[TRAY] RunWindowsTray failed: {ex.Message}");
-        }
-    }
-
-#endif
-
-    static void RunLinuxTray(bool autostart)
-    {
-        if (autostart) HideMainWindow();
-
-        string scriptPath = Path.Combine(Path.GetTempPath(), $"vum_tray_{Environment.ProcessId}.py");
-
-        string iconPath = "icon.png";
-        if (!File.Exists(iconPath)) iconPath = "icon.ico";
-        string absIconPath = File.Exists(iconPath) ? Path.GetFullPath(iconPath) : "";
-
-        string pySocketPath = _linuxSocketPath.Replace("\\", "\\\\");
-        string pyIconPath = absIconPath.Replace("\\", "\\\\");
-
-        string script = $@"
-import sys, socket, os, threading
-try:
-    import pystray
-    from PIL import Image, ImageDraw
-except ImportError:
-    sys.exit(42)
-
-SOCK = ""{pySocketPath}""
-ICON = ""{pyIconPath}""
-
-def load_icon():
-    if ICON and os.path.exists(ICON):
-        try:
-            return Image.open(ICON).resize((64, 64)).convert('RGBA')
-        except:
-            pass
-    img = Image.new('RGBA', (64, 64), (80, 40, 140, 255))
-    d = ImageDraw.Draw(img)
-    d.ellipse([8, 8, 56, 56], fill=(160, 100, 220, 255))
-    return img
-
-def send_cmd(cmd):
-    try:
-        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        s.connect(SOCK)
-        s.sendall(cmd.encode())
-        s.close()
-    except:
-        pass
-
-def on_show(icon, item): send_cmd('show')
-def on_exit(icon, item):
-    send_cmd('exit')
-    icon.stop()
-
-menu = pystray.Menu(
-    pystray.MenuItem('Show', on_show, default=True),
-    pystray.MenuItem('Exit', on_exit),
-)
-tray = pystray.Icon('VRChat Unfriend Manager', load_icon(), 'VRChat Unfriend Manager', menu)
-tray.run()
-";
-        File.WriteAllText(scriptPath, script);
-
-        if (File.Exists(_linuxSocketPath)) File.Delete(_linuxSocketPath);
-        var unixEp = new System.Net.Sockets.UnixDomainSocketEndPoint(_linuxSocketPath);
-        _linuxTraySocket = new System.Net.Sockets.Socket(
-            System.Net.Sockets.AddressFamily.Unix,
-            System.Net.Sockets.SocketType.Stream,
-            System.Net.Sockets.ProtocolType.Unspecified);
-        _linuxTraySocket.Bind(unixEp);
-        _linuxTraySocket.Listen(4);
-
-        _linuxTrayListenerThread = new Thread(() =>
-        {
-            while (_trayRunning)
-            {
-                System.Net.Sockets.Socket? client = null;
-                try { client = _linuxTraySocket.Accept(); }
-                catch { break; }
-
-                try
-                {
-                    var buf = new byte[64];
-                    int n = client.Receive(buf);
-                    var cmd = Encoding.UTF8.GetString(buf, 0, n).Trim();
-                    if (cmd == "show") ShowMainWindow();
-                    else if (cmd == "exit") Program.shouldExit = true;
-                }
-                catch { }
-                finally { try { client?.Close(); } catch { } }
-            }
-        }) { IsBackground = true };
-        _linuxTrayListenerThread.Start();
-
-        var psi = new ProcessStartInfo
-        {
-            FileName = "python3",
-            Arguments = $"\"{scriptPath}\"",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-        };
-
-        try
-        {
-            _linuxTrayProcess = Process.Start(psi);
-            _linuxTrayProcess?.WaitForExit();
-
-            int exitCode = _linuxTrayProcess?.ExitCode ?? -1;
-            if (exitCode == 42)
-            {
-                Console.WriteLine("[TRAY] pystray / Pillow not found — tray icon unavailable.");
-                Console.WriteLine("[TRAY] Install with:  pip install pystray pillow");
-            }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"[TRAY] Failed to launch tray helper: {ex.Message}");
-        }
-        finally
-        {
-            _trayRunning = false;
-            try { File.Delete(scriptPath); } catch { }
-            try { File.Delete(_linuxSocketPath); } catch { }
-            try { _linuxTraySocket?.Close(); } catch { }
         }
     }
 

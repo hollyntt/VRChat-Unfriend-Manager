@@ -59,7 +59,7 @@ public static void Draw()
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
             ImGui.SameLine();
-            ImGui.TextDisabled("(needs: pip install pystray pillow)");
+            ImGui.TextDisabled($"({PlatformService.TrayStatus})");
         }
 
         if (Directory.Exists(Paths.VrcxStartup))
@@ -88,7 +88,7 @@ public static void Draw()
             }
         }
 
-        if (Directory.Exists(Paths.VrcNextStartup))
+        if (Directory.Exists(Paths.VrcNextBase))
         {
             ImGui.Spacing();
             ImGui.Text("VRCNext Integration");

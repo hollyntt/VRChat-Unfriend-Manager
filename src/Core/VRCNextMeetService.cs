@@ -11,7 +11,7 @@ namespace VRCUFM.Core;
 /// </summary>
 public static class VRCNextMeetService
 {
-    private static string DbPath => Path.Combine(Paths.VrcNextBase, "VRCNData.db");
+    private static string DbPath => Paths.VrcNextDataFile;
     public static bool IsAvailable => File.Exists(DbPath);
 
     public sealed class MeetInfo

@@ -4,7 +4,7 @@ namespace VRCUFM.VRChat;
 
 public static class VRCNextDataService
 {
-    private static string DbPath => Path.Combine(Paths.VrcNextBase, "VRCNData.db");
+    private static string DbPath => Paths.VrcNextDataFile;
     public static bool IsAvailable => File.Exists(DbPath);
 
     public static Dictionary<string, long> LoadTimeSpentSeconds()

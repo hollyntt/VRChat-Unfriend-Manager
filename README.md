@@ -24,6 +24,7 @@
 *   **[.NET 6.0 Runtime (or newer)](https://dotnet.microsoft.com/en-us/download/dotnet/9.0)**
 *   Windows 10/11 (Recommended for Toast Notifications)
 *   Linux (Idk just linux.. any linux)
+    *   The system tray uses GTK 3 and AppIndicator/StatusNotifier bindings when available.
 
 ## 🛠️ How to Use
 
