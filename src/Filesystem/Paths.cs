@@ -8,6 +8,7 @@ public static class Paths
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VRChatUnfriendManager");
     public static readonly string CookieFile = Path.Combine(AppDataFolder, "session.cookie");
     public static readonly string ConfigFile = Path.Combine(AppDataFolder, "user.config");
+    public static readonly string AccountsFolder = Path.Combine(AppDataFolder, "accounts");
     public static readonly string UnfriendLogFile = Path.Combine(AppDataFolder, "unfriend_log.json");
     public static readonly string FriendNotesFile = Path.Combine(AppDataFolder, "friend_notes.json");
 

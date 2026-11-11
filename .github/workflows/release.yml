@@ -182,26 +182,34 @@ jobs:
     needs: [versioning, build, appimage]
     runs-on: ubuntu-latest
     steps:
-      - name: Download all
+      - name: Download all builds
         uses: actions/download-artifact@v4
         with:
           path: ./builds
 
-      - name: Create VRCUFM.zip
+      - name: Package Windows, Linux, and combined distributions
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p VRCUFM/win-x64 VRCUFM/linux-x64
-          cp -r builds/build-win-x64/* VRCUFM/win-x64/ 2>/dev/null || true
-          cp -r builds/build-linux-x64/* VRCUFM/linux-x64/ 2>/dev/null || true
-          cp builds/appimage/VRCUFM-x86_64.AppImage VRCUFM/linux-x64/ 2>/dev/null || true
-          cd VRCUFM && zip -r ../VRCUFM.zip .
-          ls -la ../VRCUFM.zip
+          cp -a builds/build-win-x64/. VRCUFM/win-x64/
+          cp -a builds/build-linux-x64/. VRCUFM/linux-x64/
+          cp builds/appimage/VRCUFM-x86_64.AppImage VRCUFM/linux-x64/
+          chmod +x VRCUFM/linux-x64/VRCUFM VRCUFM/linux-x64/VRCUFM-x86_64.AppImage
 
-      - name: Upload final VRCUFM.zip
+          (cd VRCUFM/win-x64 && zip -r ../../VRCUFM-windows-x64.zip .)
+          (cd VRCUFM/linux-x64 && tar -czf ../../VRCUFM-linux-x64.tar.gz .)
+          (cd VRCUFM && zip -r ../VRCUFM.zip .)
+          ls -lh VRCUFM-windows-x64.zip VRCUFM-linux-x64.tar.gz VRCUFM.zip
+
+      - name: Upload platform packages
         uses: actions/upload-artifact@v4
         with:
-          name: VRCUFM
-          path: VRCUFM.zip
+          name: VRCUFM-platform-packages
+          path: |
+            VRCUFM-windows-x64.zip
+            VRCUFM-linux-x64.tar.gz
+            VRCUFM.zip
 
   release:
     needs: [versioning, package, appimage]
@@ -209,10 +217,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download package
+      - name: Download platform packages
         uses: actions/download-artifact@v4
         with:
-          name: VRCUFM
+          name: VRCUFM-platform-packages
 
       - name: Download AppImage
         uses: actions/download-artifact@v4
@@ -224,16 +232,20 @@ jobs:
         with:
           artifacts: |
             VRCUFM.zip
+            VRCUFM-windows-x64.zip
+            VRCUFM-linux-x64.tar.gz
             VRCUFM-x86_64.AppImage
           tag: v${{ needs.versioning.outputs.version }}
           name: v${{ needs.versioning.outputs.version }}
           body: |
             **v${{ needs.versioning.outputs.version }}**
 
-            **Windows:** extract `VRCUFM.zip` then run `win-x64/VRCUFM.exe`
+            **Windows x64:** download `VRCUFM-windows-x64.zip`, extract it, and run `VRCUFM.exe`.
 
-            **Linux:** extract `VRCUFM.zip` then run `linux-x64/VRCUFM`
-            or download `VRCUFM-x86_64.AppImage`, `chmod +x`, and run it.
+            **Linux x64:** download `VRCUFM-linux-x64.tar.gz`, extract it, and run `./VRCUFM`.
+            Alternatively download `VRCUFM-x86_64.AppImage`, run `chmod +x VRCUFM-x86_64.AppImage`, then launch it.
+
+            **Combined package:** `VRCUFM.zip` contains both Windows and Linux builds plus the AppImage.
           prerelease: false
           makeLatest: true
           allowUpdates: true

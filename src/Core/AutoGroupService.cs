@@ -7,6 +7,8 @@ public static class AutoGroupService
 {
     static CancellationTokenSource? _cts;
     static int _running;
+    static DateTime _nextAllowedRunUtc = DateTime.MinValue;
+    static readonly TimeSpan MinimumRunInterval = TimeSpan.FromMinutes(2);
     public static volatile string LastRunStatus = "Not run yet";
 
     public static void Start()
@@ -36,13 +38,153 @@ public static class AutoGroupService
         _cts = null;
     }
 
+    private static async Task RunActivityTierGroupingAsync(CancellationToken token)
+    {
+        var (allIds, byGroup) = await Program.api.GetFavoritesDetailedAsync();
+        int moved = 0, failed = 0;
+        var mutations = new List<(SafeLimitedUserFriend Friend, int Score, string? Target, string? Current)>();
+        const int yellowMinimumScore = 20;
+        const int greenMinimumScore = 50;
+        const int thirdGroupMinimumScore = 60;
+        const int fourthGroupMinimumScore = 70;
+        const string yellowGroup = "group_0";
+        const string greenGroup = "group_1";
+        const string thirdGroup = "group_2";
+        const string fourthGroup = "group_3";
+        Program.config.AutoGroupPlacements ??= new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var friend in Program.friends.ToList())
+        {
+            if (token.IsCancellationRequested) break;
+            int score = FriendsManager.CalculateFriendScore(friend, allIds);
+            string? target = score >= fourthGroupMinimumScore
+                ? fourthGroup
+                : score >= thirdGroupMinimumScore
+                    ? thirdGroup
+                    : score >= greenMinimumScore
+                        ? greenGroup
+                        : score >= yellowMinimumScore
+                            ? yellowGroup
+                            : null;
+            string placement = target switch
+            {
+                fourthGroup => "Group 4 (70+)",
+                thirdGroup => "Group 3 (60-69)",
+                greenGroup => "Group 2 (green)",
+                yellowGroup => "Group 1 (yellow)",
+                _ => "Ungrouped (red)"
+            };
+            var current = byGroup.FirstOrDefault(pair => pair.Value.Contains(friend.Id)).Key;
+            if (target != null && byGroup.TryGetValue(target, out var targetMembers) && targetMembers.Contains(friend.Id))
+                current = target;
+            // Prefer the live VRChat group, while retaining the last known placement
+            // for this account when favorite metadata is temporarily incomplete.
+            var remembered = Program.config.AutoGroupPlacements.TryGetValue(friend.Id, out var saved)
+                ? saved
+                : null;
+            var effectiveCurrent = string.IsNullOrWhiteSpace(current) ? remembered : current;
+            if (target == null && !allIds.Contains(friend.Id))
+            {
+                Program.config.AutoGroupPlacements.Remove(friend.Id);
+                continue;
+            }
+            if (target != null && string.Equals(effectiveCurrent, target, StringComparison.OrdinalIgnoreCase))
+            {
+                Program.config.AutoGroupPlacements[friend.Id] = target;
+                continue;
+            }
+            mutations.Add((friend, score, target, effectiveCurrent));
+        }
+
+        foreach (var mutation in mutations)
+        {
+            if (token.IsCancellationRequested) break;
+            var friend = mutation.Friend;
+            try
+            {
+                if (mutation.Target == null)
+                {
+                    await Program.api.RemoveFriendFavoriteAsync(friend.Id);
+                    allIds.Remove(friend.Id);
+                    foreach (var group in byGroup.Values) group.Remove(friend.Id);
+                }
+                else
+                {
+                    if (allIds.Contains(friend.Id))
+                        await Program.api.RemoveFriendFavoriteAsync(friend.Id);
+                    await Program.api.AddFriendFavoriteAsync(friend.Id, mutation.Target);
+                    allIds.Add(friend.Id);
+                    foreach (var group in byGroup.Values) group.Remove(friend.Id);
+                    if (!byGroup.TryGetValue(mutation.Target, out var targetSet))
+                        byGroup[mutation.Target] = targetSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    targetSet.Add(friend.Id);
+                }
+                moved++;
+                if (mutation.Target == null)
+                    Program.config.AutoGroupPlacements.Remove(friend.Id);
+                else
+                    Program.config.AutoGroupPlacements[friend.Id] = mutation.Target;
+                Program.SaveConfig();
+                var placement = mutation.Target switch
+                {
+                    fourthGroup => "Group 4 (70+)",
+                    thirdGroup => "Group 3 (60-69)",
+                    greenGroup => "Group 2 (green)",
+                    yellowGroup => "Group 1 (yellow)",
+                    _ => "Ungrouped (red)"
+                };
+                Console.WriteLine($"[AutoGroup] {friend.DisplayName}: score {mutation.Score} -> {placement}");
+                _ = DiscordWebhookService.NotifyAutoGroupPlacementAsync(friend.DisplayName, mutation.Score, placement);
+                // A shorter delay preserves safety while making normal runs responsive.
+                await Task.Delay(TimeSpan.FromSeconds(3), token);
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { break; }
+            catch (Exception ex)
+            {
+                failed++;
+                if (IsRateLimited(ex))
+                {
+                    _nextAllowedRunUtc = DateTime.UtcNow + TimeSpan.FromMinutes(10);
+                    LastRunStatus = "VRChat rate-limited this run; waiting 10 minutes before retrying.";
+                    break;
+                }
+                Console.WriteLine($"[AutoGroup] Tier update failed for {friend.DisplayName}: {ex.Message}");
+            }
+        }
+
+        Program.favorites = allIds;
+        Program.favByGroup = byGroup;
+        LastRunStatus = $"Score placements: {moved} moved" + (failed > 0 ? $", {failed} failed" : "");
+        if (moved > 0)
+        {
+            Program.status = "Auto-Group: " + LastRunStatus;
+            Program.ShowToast("Auto-Group", LastRunStatus);
+            _ = DiscordWebhookService.NotifyAutoGroupAsync(LastRunStatus);
+            _ = OscNotificationService.NotifyAutoGroupAsync(LastRunStatus);
+        }
+    }
+
+    private static bool IsRateLimited(Exception ex) =>
+        ex.Message.Contains("429", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("too quickly", StringComparison.OrdinalIgnoreCase) ||
+        ex.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase);
+
     public static async Task RunOnceAsync(CancellationToken token = default)
     {
+        if (DateTime.UtcNow < _nextAllowedRunUtc)
+        {
+            var wait = _nextAllowedRunUtc - DateTime.UtcNow;
+            LastRunStatus = $"Cooling down after a recent run ({Math.Ceiling(wait.TotalSeconds)}s remaining).";
+            return;
+        }
+
         if (System.Threading.Interlocked.Exchange(ref _running, 1) == 1)
         {
             LastRunStatus = "A grouping run is already in progress.";
             return;
         }
+
+        _nextAllowedRunUtc = DateTime.UtcNow + MinimumRunInterval;
 
         try
         {
@@ -52,6 +194,12 @@ public static class AutoGroupService
                 return;
             }
 
+            // Auto-grouping always uses the activity-tier classifier. The legacy
+            // arbitrary rule stack is intentionally no longer used for automatic runs.
+            await RunActivityTierGroupingAsync(token);
+            return;
+
+#pragma warning disable CS0162
             var rules = (Program.config.AutoGroupRules ?? new List<AutoGroupRule>())
                 .Where(r => r != null && r.Enabled).ToList();
             if (rules.Count == 0)
@@ -230,7 +378,17 @@ public static class AutoGroupService
         }
         catch (Exception ex)
         {
-            LastRunStatus = $"Run failed: {ex.Message}";
+            // Rate limits require a longer pause before another run is allowed.
+            if (ex.Message.Contains("429", StringComparison.OrdinalIgnoreCase) ||
+                ex.Message.Contains("too quickly", StringComparison.OrdinalIgnoreCase))
+            {
+                _nextAllowedRunUtc = DateTime.UtcNow + TimeSpan.FromMinutes(10);
+                LastRunStatus = "VRChat rate-limited this run; waiting 10 minutes before retrying.";
+            }
+            else
+            {
+                LastRunStatus = $"Run failed: {ex.Message}";
+            }
             Console.WriteLine("[AutoGroup] Run failed: " + ex);
         }
         finally

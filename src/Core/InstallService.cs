@@ -114,6 +114,9 @@ public static class InstallService
 
     public static void InstallAndRelaunch(string targetDir, AppConfig config, bool createStartMenu, Action saveConfig)
     {
+        if (string.IsNullOrWhiteSpace(targetDir))
+            throw new InvalidOperationException("Install path is empty.");
+
         targetDir = Path.GetFullPath(targetDir.Trim());
         if (string.IsNullOrWhiteSpace(targetDir))
             throw new InvalidOperationException("Install path is empty.");

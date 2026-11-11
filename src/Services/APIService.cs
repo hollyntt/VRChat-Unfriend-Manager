@@ -15,8 +15,11 @@ namespace VRCUFM.Services;
 
 public partial class APIService
 {
-    private const string UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+    private const string DefaultUserAgent = "VRCUFM/1.0 (+https://github.com/hollyntt/VRChat-Unfriend-Manager)";
     private static readonly Uri BaseUri = new("https://api.vrchat.cloud/api/1/");
+    // Program.api is initialized before Program.config during type initialization.
+    // Keep this lookup null-safe so startup does not dereference config too early.
+    private string UserAgent => string.IsNullOrWhiteSpace(Program.config?.UserAgent) ? DefaultUserAgent : Program.config.UserAgent.Trim();
     private readonly HttpClient client;
     private readonly CookieContainer cookies = new();
     private Configuration? cfg;
@@ -30,7 +33,7 @@ public partial class APIService
     {
         var handler = new HttpClientHandler { CookieContainer = cookies, UseCookies = true, AllowAutoRedirect = true };
         client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
-        client.DefaultRequestHeaders.UserAgent.ParseAdd(UA);
+        client.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
     }
 
     private void SaveCookies()
@@ -55,7 +58,7 @@ public partial class APIService
     private void RebuildAuthClient(string cookieHeader)
     {
         _authClient = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
-        _authClient.DefaultRequestHeaders.UserAgent.ParseAdd(UA);
+        _authClient.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
         _authClient.DefaultRequestHeaders.Add("Cookie", cookieHeader);
     }
 
@@ -80,7 +83,7 @@ public partial class APIService
         try
         {
             using var test = new HttpClient();
-            test.DefaultRequestHeaders.UserAgent.ParseAdd(UA);
+            test.DefaultRequestHeaders.UserAgent.ParseAdd(UserAgent);
             if (cfg.DefaultHeaders.TryGetValue("Cookie", out var c))
                 test.DefaultRequestHeaders.Add("Cookie", c);
             var r = await test.GetAsync("https://api.vrchat.cloud/api/1/auth/user");
@@ -122,7 +125,7 @@ public partial class APIService
         var vrcxCookie = TryGetVrcxCookie();
         if (vrcxCookie != null)
         {
-            cfg = new Configuration { UserAgent = UA };
+            cfg = new Configuration { UserAgent = UserAgent };
             cfg.DefaultHeaders["Cookie"] = vrcxCookie;
             if (await TestSessionAsync())
             {
@@ -138,7 +141,7 @@ public partial class APIService
 
         if (!string.IsNullOrWhiteSpace(Program.config.Cookie) && Program.config.Cookie.Contains("auth="))
         {
-            cfg = new Configuration { UserAgent = UA };
+            cfg = new Configuration { UserAgent = UserAgent };
             cfg.DefaultHeaders["Cookie"] = Program.config.Cookie.Trim();
             if (await TestSessionAsync())
             {
@@ -154,7 +157,7 @@ public partial class APIService
             var cookie = await File.ReadAllTextAsync(Paths.CookieFile);
             if (!string.IsNullOrWhiteSpace(cookie) && cookie.Contains("auth="))
             {
-                cfg = new Configuration { UserAgent = UA };
+                cfg = new Configuration { UserAgent = UserAgent };
                 cfg.DefaultHeaders["Cookie"] = cookie.Trim();
                 if (await TestSessionAsync())
                 {
@@ -183,7 +186,7 @@ public partial class APIService
         try
         {
             client.DefaultRequestHeaders.Clear();
-            client.DefaultRequestHeaders.Add("User-Agent", UA);
+            client.DefaultRequestHeaders.Add("User-Agent", UserAgent);
 
             var authString = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
             client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Basic", authString);
@@ -244,7 +247,7 @@ public partial class APIService
             if (tfaCookie != null) fullCookie += $"; twoFactorAuth={tfaCookie.Value}";
 
             cfg = new Configuration();
-            cfg.UserAgent = UA;
+            cfg.UserAgent = UserAgent;
             cfg.DefaultHeaders ??= new Dictionary<string, string>();
             cfg.DefaultHeaders["Cookie"] = fullCookie;
 

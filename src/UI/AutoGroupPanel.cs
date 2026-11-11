@@ -53,6 +53,8 @@ public static class AutoGroupPanel
         if (!Program.config.AutoGroupEnabled)
             return;
 
+        ImGui.TextDisabled("Automatic score placement: red = ungrouped, yellow = Group 1, green = Group 2, 60+ = Group 3, 70+ = Group 4.");
+
         ImGui.TextDisabled($"Last run: {AutoGroupService.LastRunStatus}");
 
         ImGui.SameLine();
@@ -128,7 +130,7 @@ public static class AutoGroupPanel
 
             ImGui.SameLine();
             int aIdx = Array.IndexOf(Actions, (rule.Action ?? "add").ToLowerInvariant());
-            if (aIdx < 0) aIdx = 0;
+            aIdx = Math.Clamp(aIdx, 0, Actions.Length - 1);
             ImGui.SetNextItemWidth(170);
             if (ImGui.Combo("##act", ref aIdx, ActionLabels, ActionLabels.Length))
             {
@@ -144,7 +146,7 @@ public static class AutoGroupPanel
                 ImGui.TextDisabled("->");
                 ImGui.SameLine();
                 int gIdx = Array.IndexOf(GroupTags, rule.TargetGroupTag);
-                if (gIdx < 0) gIdx = 0;
+                gIdx = Math.Clamp(gIdx, 0, GroupTags.Length - 1);
                 string[] labels = GroupTags.Select(t =>
                 {
                     string label = Program.favGroupNames.TryGetValue(t, out var n) ? AsciiOnly(n) : t;

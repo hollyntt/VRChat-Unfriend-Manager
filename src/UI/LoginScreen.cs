@@ -55,6 +55,10 @@ public static void Draw()
 
         ImGui.Spacing();
 
+        ImGui.SetCursorPosX(pad);
+        ImGui.TextDisabled("VRChat account login");
+        ImGui.Spacing();
+
         if (string.IsNullOrEmpty(Program.user) && !string.IsNullOrEmpty(Program.config.Username))
             Program.user = Program.config.Username;
 
@@ -77,6 +81,8 @@ public static void Draw()
         ImGui.SetCursorPosX(pad);
         ImGui.Checkbox("Remember me", ref Program.remember);
         ImGui.Spacing();
+        ImGui.SetCursorPosX(pad);
+        ImGui.TextDisabled("Adding an account here saves it automatically in Manage accounts.");
 
         bool canLogin = !Program.working && !isSigningIn && !string.IsNullOrWhiteSpace(Program.user) && !string.IsNullOrWhiteSpace(Program.pass);
 
@@ -88,7 +94,16 @@ public static void Draw()
             Program.status = "Signing in...";
             _ = Task.Run(async () =>
             {
-                var (success, name, error) = await Program.api.LoginWithCredentialsAsync(Program.user, Program.pass);
+                var loginUser = Program.user.Trim();
+                var loginPass = Program.pass;
+                var profile = Program.Accounts.EnsureProfileForLogin(loginUser);
+                if (profile.Id != Program.CurrentAccountId)
+                {
+                    await Program.SwitchAccountAsync(profile.Id);
+                    Program.user = loginUser;
+                    Program.pass = loginPass;
+                }
+                var (success, name, error) = await Program.api.LoginWithCredentialsAsync(loginUser, loginPass);
                 if (success && name != null)
                 {
                     Program.loggedInAs = name;

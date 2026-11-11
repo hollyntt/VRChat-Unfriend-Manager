@@ -60,7 +60,17 @@ public partial class APIService
         if (recordId == null)
             return; // not favorited
 
-        await Favorites.RemoveFavoriteAsync(recordId);
+        try
+        {
+            await Favorites.RemoveFavoriteAsync(recordId);
+        }
+        catch (ApiException ex) when (
+            ex.ErrorCode == 400 &&
+            ex.ErrorContent?.ToString()?.Contains("Favorite not found", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            // The favorite may have been removed by another run/client. Treat this as idempotent.
+            Console.WriteLine($"[AutoGroup] Favorite {userId} was already removed.");
+        }
     }
 
 

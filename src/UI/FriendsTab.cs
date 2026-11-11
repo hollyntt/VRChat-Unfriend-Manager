@@ -66,7 +66,8 @@ public static void Draw(int sw, int sh)
             };
             int inMatch = Program.friends.Count(f =>
                 (!Program.hideFavs || !Program.favorites.Contains(f.Id)) &&
-                (string.IsNullOrEmpty(f.LastLogin) || DateTime.Parse(f.LastLogin) < inCutoff));
+                (string.IsNullOrEmpty(f.LastLogin) ||
+                 !DateTime.TryParse(f.LastLogin, out var lastLogin) || lastLogin.ToUniversalTime() < inCutoff));
             ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), $"({inMatch} match)");
         }
 
@@ -212,7 +213,8 @@ public static void Draw(int sw, int sh)
                 1 => DateTime.UtcNow.AddMonths(-Program.inactiveVal),
                 _ => DateTime.UtcNow.AddYears(-Program.inactiveVal)
             };
-            temp = temp.Where(f => string.IsNullOrEmpty(f.LastLogin) || DateTime.Parse(f.LastLogin) < cutoff).ToList();
+            temp = temp.Where(f => string.IsNullOrEmpty(f.LastLogin) ||
+                !DateTime.TryParse(f.LastLogin, out var lastLogin) || lastLogin.ToUniversalTime() < cutoff).ToList();
         }
         if (Program.togetherOn && Program.togetherVal >= 0)
         {
@@ -256,8 +258,8 @@ public static void Draw(int sw, int sh)
 
         temp = Program.sort switch
         {
-            0 => temp.OrderBy(f => string.IsNullOrEmpty(f.LastLogin) ? DateTime.MinValue : DateTime.Parse(f.LastLogin)).ToList(),
-            1 => temp.OrderByDescending(f => string.IsNullOrEmpty(f.LastLogin) ? DateTime.MinValue : DateTime.Parse(f.LastLogin)).ToList(),
+            0 => temp.OrderBy(f => string.IsNullOrEmpty(f.LastLogin) || !DateTime.TryParse(f.LastLogin, out var lastLogin) ? DateTime.MinValue : lastLogin.ToUniversalTime()).ToList(),
+            1 => temp.OrderByDescending(f => string.IsNullOrEmpty(f.LastLogin) || !DateTime.TryParse(f.LastLogin, out var lastLogin) ? DateTime.MinValue : lastLogin.ToUniversalTime()).ToList(),
             2 => temp.OrderBy(f => f.DisplayName).ToList(),
             3 => temp.OrderByDescending(f => f.DisplayName).ToList(),
             4 => temp.OrderByDescending(f => f.TimeSpentMs).ToList(),
@@ -283,7 +285,9 @@ public static void Draw(int sw, int sh)
             for (int i = 0; i < Program.shown.Count; i++)
             {
                 var f = Program.shown[i];
-                var ago = string.IsNullOrEmpty(f.LastLogin) ? "never" : Program.Ago(DateTime.Parse(f.LastLogin));
+                var ago = string.IsNullOrEmpty(f.LastLogin) || !DateTime.TryParse(f.LastLogin, out var lastLogin)
+                    ? "never"
+                    : Program.Ago(lastLogin);
                 var together = Program.FormatTimeSpent(f.TimeSpentMs);
                 bool sel = Program.selected.Contains(i);
                 int score = FriendsManager.CalculateFriendScore(f, Program.favorites);

@@ -119,8 +119,12 @@ public static class FriendsManager
     public static void SelectAllInactive(List<SafeLimitedUserFriend> shown, HashSet<int> selected, DateTime cutoff)
     {
         for (int i = 0; i < shown.Count; i++)
-            if (string.IsNullOrEmpty(shown[i].LastLogin) || DateTime.Parse(shown[i].LastLogin) < cutoff)
+        {
+            var lastLogin = shown[i].LastLogin;
+            if (string.IsNullOrEmpty(lastLogin) ||
+                !DateTime.TryParse(lastLogin, out var parsed) || parsed.ToUniversalTime() < cutoff)
                 selected.Add(i);
+        }
     }
 
     public static void SelectAllLowTime(List<SafeLimitedUserFriend> shown, HashSet<int> selected, long thresholdMs)
@@ -156,7 +160,7 @@ public static class FriendsManager
     // -- Scoring & Stats --------------------------------------------------
 
     /// <summary>Simple 0-100 score from favorites, activity, time together, bio, notes.</summary>
-    public static int CalculateFriendScore(SafeLimitedUserFriend friend, HashSet<string> favorites)
+    public static int CalculateFriendScore(SafeLimitedUserFriend friend, HashSet<string>? favorites)
     {
         int score = 0;
 
@@ -194,7 +198,7 @@ public static class FriendsManager
 
     public static FriendStats CalculateStats(
         List<SafeLimitedUserFriend> friends,
-        HashSet<string> favorites,
+        HashSet<string>? favorites,
         Dictionary<string, HashSet<string>> favByGroup)
     {
         var stats = new FriendStats { TotalFriends = friends.Count };
@@ -204,7 +208,10 @@ public static class FriendsManager
         {
             if (!string.IsNullOrEmpty(f.LastLogin))
             {
-                var days = (DateTime.UtcNow - DateTime.Parse(f.LastLogin)).TotalDays;
+                if (!DateTime.TryParse(f.LastLogin, out var lastLogin))
+                    continue;
+
+                var days = (DateTime.UtcNow - lastLogin.ToUniversalTime()).TotalDays;
                 if (days < 1) stats.OnlineFriends++;
                 if (days > 90) stats.InactiveFriends++;
                 if (days > 365) stats.GhostFriends++;
@@ -217,7 +224,7 @@ public static class FriendsManager
 
             stats.TotalTimeTogetherMs += f.TimeSpentMs;
 
-            foreach (var (tag, ids) in favByGroup)
+            foreach (var (tag, ids) in favByGroup ?? new Dictionary<string, HashSet<string>>())
             {
                 if (ids.Contains(f.Id))
                 {
@@ -227,7 +234,7 @@ public static class FriendsManager
             }
         }
 
-        stats.FavoritesCount = favorites.Count;
+        stats.FavoritesCount = favorites?.Count ?? 0;
         stats.AverageTimeTogetherMs = friends.Count > 0 ? stats.TotalTimeTogetherMs / friends.Count : 0;
         stats.GroupDistribution = groupCounts;
         stats.InFavoriteGroups = groupCounts.Values.Sum();
@@ -272,7 +279,7 @@ public static class FriendsManager
     {
         if (string.IsNullOrEmpty(f.LastLogin) || !DateTime.TryParse(f.LastLogin, out var last))
             return 99999;
-        return (DateTime.UtcNow - last.ToUniversalTime()).TotalDays;
+        return Math.Max(0, (DateTime.UtcNow - last.ToUniversalTime()).TotalDays);
     }
 
     public static double UnitToDays(int value, int unitIndex) => unitIndex switch
@@ -310,7 +317,7 @@ public static class FriendsManager
         SaveData();
     }
 
-    public static bool MatchesAutoGroupRule(SafeLimitedUserFriend f, AutoGroupRule rule, HashSet<string> favorites)
+    public static bool MatchesAutoGroupRule(SafeLimitedUserFriend f, AutoGroupRule rule, HashSet<string>? favorites)
     {
         if (rule == null || !rule.Enabled) return false;
 

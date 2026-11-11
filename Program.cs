@@ -71,6 +71,9 @@ namespace VRCUFM
         internal static int unfriendDone = 0;
         internal static CancellationTokenSource? unfriendCts;
         internal static AppConfig config = new();
+        /// <summary>Profile storage for callers that need to manage multiple VRChat accounts.</summary>
+        public static readonly AccountManager Accounts = new();
+        public static string CurrentAccountId => Accounts.CurrentProfile.Id;
         internal static CancellationTokenSource? autoCts;
         internal static CancellationTokenSource? autoDeclineCts;
         internal static readonly string[] units = { "Days", "Months", "Years" };
@@ -292,7 +295,12 @@ namespace VRCUFM
             isUnfriending = true; isPaused = false;
             unfriendTotal = selected.Count; unfriendDone = 0;
             unfriendCts = new CancellationTokenSource();
-            var list = selected.Select(i => shown[i]).ToList();
+            // Snapshot selected users before the worker starts; indices can become stale after filtering or refresh.
+            var list = selected
+                .Where(i => i >= 0 && i < shown.Count)
+                .Select(i => shown[i])
+                .ToList();
+            unfriendTotal = list.Count;
 
             try
             {
@@ -311,8 +319,8 @@ namespace VRCUFM
                         unfriendDone++;
                         FriendsManager.LogUnfriend(u, "manual");
                         ShowUnfriendToast(u.DisplayName);
-                        friends.RemoveAll(x => x.Id == u.Id);
-                        shown.RemoveAll(x => x.Id == u.Id);
+                        // The UI owns these collections; refresh after the worker completes instead of mutating them here.
+                        // This also avoids invalidating row indices while ImGui is rendering.
                     }
                     catch (Exception ex) { Console.WriteLine(ex.Message); }
 
@@ -348,6 +356,68 @@ namespace VRCUFM
                 status = "Re-add failed: " + ex.Message;
                 ShowToast("Re-add failed", ex.Message);
             }
+        }
+
+        internal static async Task SwitchAccountAsync(string accountId)
+        {
+            if (working || isUnfriending) return;
+            working = true;
+            try
+            {
+                SaveConfig();
+                autoCts?.Cancel();
+                autoDeclineCts?.Cancel();
+                AutoGroupService.Stop();
+                Accounts.SwitchProfile(accountId);
+                config = Accounts.LoadCurrentProfile();
+                api = new APIService();
+                friends.Clear();
+                shown.Clear();
+                favorites.Clear();
+                favByGroup.Clear();
+                favGroupNames.Clear();
+                selected.Clear();
+                incomingFriendRequests.Clear();
+                loggedInAs = "";
+                isLoggedIn = false;
+                sessionRestored = false;
+                user = config.Username;
+                pass = "";
+                remember = config.RememberMe;
+                hideFavs = config.ExcludeFavorites;
+                inactiveOn = config.InactiveEnabled;
+                inactiveVal = config.InactiveValue;
+                inactiveUnit = config.InactiveUnitIndex;
+                togetherOn = config.TogetherFilterEnabled;
+                togetherVal = config.TogetherFilterValue;
+                togetherUnit = config.TogetherFilterUnit;
+                sort = config.SortOptionIndex;
+                autoDecline = config.AutoDeclineFriendRequests;
+                autoSendBack = config.AutoSendRequestBack;
+                onlyStrangers = config.AutoDeclineOnlyFromStrangers;
+                status = $"Loading account {Accounts.CurrentProfile.DisplayName}...";
+
+                var (restored, name) = await api.RestoreSessionFromDiskOrConfigAsync();
+                if (!restored)
+                {
+                    status = "Account selected; please log in";
+                    return;
+                }
+
+                loggedInAs = name ?? config.Username;
+                isLoggedIn = true;
+                sessionRestored = true;
+                await Refresh();
+                if (config.AutoUnfriendEnabled) SchedulerService.StartAutoScheduler();
+                if (config.AutoGroupEnabled) AutoGroupService.Start();
+                if (config.AutoDeclineFriendRequests) SchedulerService.StartAutoDeclineChecker();
+                status = $"Logged in as {loggedInAs}";
+            }
+            catch (Exception ex)
+            {
+                status = "Account switch failed: " + ex.Message;
+            }
+            finally { working = false; }
         }
 
         internal static async Task Refresh()
@@ -422,6 +492,11 @@ namespace VRCUFM
         #endregion
 
         #region Utilities
+
+        internal static DateTime ParseLastLogin(string value)
+        {
+            return DateTime.TryParse(value, out var parsed) ? parsed : DateTime.MinValue;
+        }
 
         internal static string Ago(DateTime dt)
         {
@@ -565,6 +640,7 @@ namespace VRCUFM
                 updateAvailable = true;
                 latestVersion = tag;
                 downloadUrl = url;
+                _ = DiscordWebhookService.NotifyUpdateAsync($"Update found: {tag}");
             }
             catch (Exception ex)
             {
@@ -654,6 +730,7 @@ namespace VRCUFM
                         UseShellExecute = true,
                     });
                     _updateStatus = "Installing... app will restart";
+                    _ = DiscordWebhookService.NotifyUpdateAsync($"Update applied: {UpdateAvailableTag ?? "latest release"}");
                     await Task.Delay(400);
                     Environment.Exit(0);
                     return;
@@ -766,6 +843,7 @@ namespace VRCUFM
 
                 System.Diagnostics.Process.Start(psi);
                 _updateStatus = "Installing... app will restart";
+                _ = DiscordWebhookService.NotifyUpdateAsync($"Update applied: {UpdateAvailableTag ?? "latest release"}");
                 await Task.Delay(400);
                 Environment.Exit(0);
             }
@@ -819,12 +897,26 @@ namespace VRCUFM
         internal static void LoadConfig()
         {
             Paths.EnsureExists();
-            if (!File.Exists(Paths.ConfigFile)) return;
             try
             {
-                var json = File.ReadAllText(Paths.ConfigFile);
-                var c = JsonSerializer.Deserialize<AppConfig>(json);
-                if (c != null) config = c;
+                // Start with the legacy/default config, then identify a previously-used
+                // account by its saved auth cookie before restoring the session.
+                if (File.Exists(Paths.ConfigFile))
+                {
+                    var defaultConfig = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(Paths.ConfigFile));
+                    if (defaultConfig != null) config = defaultConfig;
+                }
+
+                var matched = Accounts.FindByCookie(config.Cookie);
+                if (!matched.IsDefault)
+                {
+                    Accounts.SwitchProfile(matched.Id);
+                    config = Accounts.LoadProfile(matched);
+                }
+                else if (File.Exists(Accounts.CurrentProfile.ConfigPath))
+                {
+                    config = Accounts.LoadCurrentProfile();
+                }
             }
             catch { }
         }
@@ -856,8 +948,7 @@ namespace VRCUFM
 
             try
             {
-                File.WriteAllText(Paths.ConfigFile,
-                    JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }));
+                Accounts.SaveCurrentProfile(config);
             }
             catch { }
         }

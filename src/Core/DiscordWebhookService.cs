@@ -43,6 +43,16 @@ public static class DiscordWebhookService
         return SendEmbedAsync("Auto-group", summary, 0x9B59B6, null);
     }
 
+    public static Task NotifyAutoGroupPlacementAsync(string displayName, int score, string placement)
+    {
+        if (!IsConfigured || !Program.config.DiscordNotifyAutoGroup) return Task.CompletedTask;
+        return SendEmbedAsync(
+            "Auto-group placement",
+            $"Moved **{Escape(displayName)}** to **{Escape(placement)}**.",
+            0x9B59B6,
+            new[] { ("Score", score.ToString(), true), ("Placement", placement, true) });
+    }
+
     public static Task NotifyLoginAsync(string username)
     {
         if (!IsConfigured || !Program.config.DiscordNotifyLogin) return Task.CompletedTask;

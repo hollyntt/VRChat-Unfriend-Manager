@@ -16,4 +16,5 @@ internal static class UIShared
     public static readonly string[] SearchFields = { "Name", "Group" };
     public static readonly string[] Sorts = { "Oldest", "Newest", "A-Z", "Z-A", "Most Time", "Least Time", "Lowest Score", "Highest Score" };
     public static readonly string[] NavLabels = { "Friends", "Groups", "Requests", "Settings" };
+    public static readonly string[] FeatureBadges = { "Profiles", "Auto-groups", "Scheduler", "Requests", "Integrations" };
 }

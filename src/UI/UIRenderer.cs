@@ -35,12 +35,6 @@ public static class UIRenderer
         ImGui.TextColored(UITheme.Accent, "VRCUFM");
         ImGui.SetCursorPosX(20);
         ImGui.TextColored(UITheme.SubText, "v" + Program.AppVersion);
-        if (Program.isLoggedIn)
-        {
-            ImGui.SetCursorPosX(20);
-            ImGui.TextColored(UITheme.Success, Program.loggedInAs);
-        }
-
         ImGui.Dummy(new Vector2(0, 28));
 
         for (int i = 0; i < UIShared.NavLabels.Length; i++)
@@ -70,8 +64,16 @@ public static class UIRenderer
             Program.api = new APIService();
             Program.friends.Clear(); Program.favorites.Clear(); Program.selected.Clear();
             Program.incomingFriendRequests.Clear();
+            Program.autoCts?.Cancel();
+            Program.autoCts = null;
             Program.autoDeclineCts?.Cancel();
             Program.autoDeclineCts = null;
+            Program.pendingAutoConfirm = false;
+            lock (Program.autoConfirmLock)
+            {
+                Program.autoConfirmTcs?.TrySetResult(false);
+                Program.autoConfirmTcs = null;
+            }
             AutoGroupService.Stop();
             Program.loggedInAs = ""; Program.isLoggedIn = false; Program.sessionRestored = false;
             Program.user = ""; Program.pass = "";

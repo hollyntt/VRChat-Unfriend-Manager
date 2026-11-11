@@ -264,6 +264,7 @@ public static class SchedulerService
                                     await Program.api.DeclineFriendRequestAsync(req.Id);
                                     declined++;
                                     Console.WriteLine($"[AutoDecline] Declined request from {senderName}");
+                                    _ = DiscordWebhookService.NotifyCustomAsync("Friend request declined", $"Declined a request from **{senderName}**.");
 
                                     if (Program.config.AutoSendRequestBack)
                                     {
@@ -271,6 +272,7 @@ public static class SchedulerService
                                         {
                                             await Program.api.SendFriendRequestAsync(senderId);
                                             Console.WriteLine($"[AutoDecline] Sent request back to {senderName}");
+                                            _ = DiscordWebhookService.NotifyCustomAsync("Friend request sent", $"Sent a request back to **{senderName}**.");
                                         }
                                         catch (Exception ex)
                                         {

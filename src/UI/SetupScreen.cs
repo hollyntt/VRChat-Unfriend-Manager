@@ -97,7 +97,7 @@ public static void Draw()
             {
                 Program.status = "Installing...";
                 InstallService.InstallAndRelaunch(
-                    Program.setupInstallPath,
+                    Program.setupInstallPath ?? string.Empty,
                     Program.config,
                     Program.config.StartMenuShortcut,
                     Program.SaveConfig);

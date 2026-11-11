@@ -12,10 +12,123 @@ using File = System.IO.File;
 namespace VRCUFM.UI;
 public static class SettingsTab
 {
-public static void Draw()
+    private static bool _manageAccountsOpen;
+    private static string _newProfileId = "";
+    private static string _newProfileName = "";
+
+    public static void Draw()
     {
         float availH = ImGui.GetContentRegionAvail().Y;
         ImGui.BeginChild("##settings_scroll", new Vector2(0, Math.Max(100f, availH)), ImGuiChildFlags.None, ImGuiWindowFlags.AlwaysVerticalScrollbar);
+
+        ImGui.Spacing();
+        ImGui.Text("VRChat Accounts");
+        ImGui.Separator();
+        ImGui.TextDisabled("Manage saved VRChat login sessions and account settings.");
+        if (ImGui.Button("Manage accounts", new Vector2(220, 34)))
+            _manageAccountsOpen = true;
+
+        var profiles = Program.Accounts.Profiles;
+        if (_manageAccountsOpen)
+        {
+            ImGui.OpenPopup("Manage VRChat accounts");
+            _manageAccountsOpen = false;
+        }
+        bool managePopupOpen = true;
+        if (ImGui.BeginPopupModal("Manage VRChat accounts", ref managePopupOpen, ImGuiWindowFlags.AlwaysAutoResize))
+        {
+            ImGui.TextDisabled("Select an account to switch sessions, or add another VRChat account.");
+            ImGui.Separator();
+            foreach (var profile in profiles)
+            {
+                bool isCurrent = profile.Id.Equals(Program.CurrentAccountId, StringComparison.OrdinalIgnoreCase);
+                string label = string.IsNullOrWhiteSpace(profile.DisplayName) ? profile.Id : profile.DisplayName;
+                if (isCurrent) ImGui.TextColored(UITheme.Success, "● " + label);
+                else if (ImGui.Selectable(label + "##account_" + profile.Id))
+                    _ = Task.Run(() => Program.SwitchAccountAsync(profile.Id));
+                ImGui.SameLine();
+                ImGui.TextDisabled(isCurrent ? "Active" : "Saved session");
+            }
+            ImGui.Spacing();
+            if (ImGui.Button("Add account", new Vector2(140, 30)))
+            {
+                _newProfileId = "";
+                _newProfileName = "";
+                ImGui.CloseCurrentPopup();
+                Program.user = "";
+                Program.pass = "";
+                Program.status = "Add a VRChat account from the login screen";
+                Program.isLoggedIn = false;
+                Program.sessionRestored = false;
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("Close", new Vector2(90, 30)))
+                ImGui.CloseCurrentPopup();
+            ImGui.EndPopup();
+        }
+
+        int currentProfile = Math.Max(0, profiles.ToList().FindIndex(p => p.Id == Program.CurrentAccountId));
+        if (currentProfile >= 0 && currentProfile < profiles.Count)
+            ImGui.TextDisabled("Active VRChat account: " + profiles[currentProfile].DisplayName);
+
+        if (ImGui.BeginPopup("##new_profile"))
+        {
+            ImGui.SetNextItemWidth(220);
+            ImGui.TextDisabled("Profile Username");
+            ImGui.SetNextItemWidth(220);
+            ImGui.InputText("##profile_username", ref _newProfileId, 64);
+            ImGui.SetNextItemWidth(220);
+            ImGui.InputText("Display name (optional)", ref _newProfileName, 96);
+            ImGui.TextDisabled("Use the VRChat username you will log in with.");
+            if (ImGui.Button("Create") && !string.IsNullOrWhiteSpace(_newProfileId))
+            {
+                try
+                {
+                    Program.Accounts.CreateProfile(_newProfileId, _newProfileName);
+                    _newProfileId = "";
+                    _newProfileName = "";
+                    ImGui.CloseCurrentPopup();
+                }
+                catch (Exception ex) { Program.status = "Profile error: " + ex.Message; }
+            }
+            ImGui.SameLine();
+            if (ImGui.Button("Cancel")) ImGui.CloseCurrentPopup();
+            ImGui.EndPopup();
+        }
+        ImGui.TextDisabled("VRChat account: " + (string.IsNullOrWhiteSpace(Program.config.Username) ? "Not logged in" : Program.config.Username));
+        bool autoLogin = Program.config.AutoLoginOnStartup;
+        if (ImGui.Checkbox("Automatically restore this account on startup", ref autoLogin))
+        {
+            Program.config.AutoLoginOnStartup = autoLogin;
+            Program.SaveConfig();
+        }
+        ImGui.SameLine();
+        ImGui.TextDisabled("Uses this profile's saved VRChat session.");
+        ImGui.SetNextItemWidth(420);
+        string userAgent = Program.config.UserAgent;
+        if (ImGui.InputText("User-Agent", ref userAgent, 256))
+        {
+            Program.config.UserAgent = userAgent.Trim();
+            Program.SaveConfig();
+        }
+        ImGui.TextDisabled("Leave blank to use the app default. Changes apply to new requests.");
+        if (ImGui.Button("Log out current account"))
+        {
+            Program.autoCts?.Cancel();
+            Program.autoDeclineCts?.Cancel();
+            AutoGroupService.Stop();
+            Program.config.Cookie = "";
+            Program.SaveConfig();
+            Program.api = new APIService();
+            Program.isLoggedIn = false;
+            Program.sessionRestored = false;
+            Program.loggedInAs = "";
+            Program.friends.Clear();
+            Program.favorites.Clear();
+            Program.favByGroup.Clear();
+            Program.incomingFriendRequests.Clear();
+            Program.status = "Logged out; choose an account or log in";
+        }
 
         ImGui.Spacing();
         ImGui.Text("Startup Options");

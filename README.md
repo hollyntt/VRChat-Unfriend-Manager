@@ -62,15 +62,38 @@
 
 ---
 
+## 📦 Building Windows, Linux, and AppImage releases
+
+The release workflow builds all three distribution formats automatically on pushes to `master` or from **Actions → Build and Release → Run workflow**:
+
+* `VRCUFM-windows-x64.zip` — self-contained Windows x64 build.
+* `VRCUFM-linux-x64.tar.gz` — self-contained Linux x64 build.
+* `VRCUFM-x86_64.AppImage` — portable Linux AppImage.
+* `VRCUFM.zip` — combined package containing Windows and Linux builds plus the AppImage.
+
+To publish locally:
+
+```bash
+dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish/win-x64
+dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -o publish/linux-x64
+```
+
+The AppImage is assembled in CI from the Linux publish output using AppImageKit. On Linux, make the result executable before launching it:
+
+```bash
+chmod +x VRCUFM-x86_64.AppImage
+./VRCUFM-x86_64.AppImage
+```
+
 ## 🏗️ Building from Source
 
-1.  Clone this repository.
-2.  Ensure you have the .NET 6.0 SDK installed.
-3.  Navigate to the project folder in your terminal.
-4.  Run:
-    ```bash
-    dotnet run
-    ```
+1. Clone this repository.
+2. Ensure you have the .NET 10 SDK installed.
+3. Navigate to the project folder in your terminal.
+4. Run:
+   ```bash
+   dotnet run
+   ```
 
 ---
 > Copyright © 2025 [hollynt]

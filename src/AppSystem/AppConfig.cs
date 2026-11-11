@@ -5,6 +5,8 @@ public class AppConfig
     public string Username { get; set; } = "";
     public string EncodedPassword { get; set; } = "";
     public string Cookie { get; set; } = "";
+    public string UserAgent { get; set; } = "";
+    public bool AutoLoginOnStartup { get; set; } = true;
     public bool RememberMe { get; set; } = true;
     public bool ExcludeFavorites { get; set; } = true;
     public bool InactiveEnabled { get; set; } = false;
@@ -69,6 +71,13 @@ public class AppConfig
     public bool AutoGroupEnabled { get; set; } = false;
     public int AutoGroupIntervalMinutes { get; set; } = 30;
     public List<AutoGroupRule> AutoGroupRules { get; set; } = new();
+    public bool AutoGroupActivityTiers { get; set; } = true;
+    public int AutoGroupActiveDays { get; set; } = 30;
+    public int AutoGroupReallyActiveDays { get; set; } = 1;
+    public string AutoGroupNonActiveTag { get; set; } = "group_0";
+    public string AutoGroupActiveTag { get; set; } = "group_1";
+    public string AutoGroupReallyActiveTag { get; set; } = "group_2";
+    public Dictionary<string, string> AutoGroupPlacements { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
 
     // Discord webhook
