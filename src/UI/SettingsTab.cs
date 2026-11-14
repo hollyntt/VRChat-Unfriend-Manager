@@ -175,10 +175,11 @@ public static class SettingsTab
             ImGui.TextDisabled($"({PlatformService.TrayStatus})");
         }
 
-        if (Directory.Exists(Paths.VrcxStartup))
+        if (Directory.Exists(Paths.VrcxBase) || VRCXDataService.IsAvailable ||
+            Program.config.VrcxStartupDesktop || Program.config.VrcxStartupVr)
         {
             ImGui.Spacing();
-            ImGui.Text("VRCX Integration");
+            ImGui.Text("Legacy VRCX Integration");
             if (VRCXDataService.IsAvailable)
                 ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "[OK] Legacy VRCX database found - time together data enabled");
             else
@@ -209,6 +210,33 @@ public static class SettingsTab
                 ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "[OK] VRCX-0 database found - time together data enabled");
             else
                 ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCX-0.sqlite3 not found - time together will show as '-'");
+        }
+
+        if (Directory.Exists(Paths.VrcxZeroBase) || VRCXZeroDataService.IsAvailable ||
+            Program.config.VrcxZeroStartupDesktop || Program.config.VrcxZeroStartupVr)
+        {
+            ImGui.Spacing();
+            ImGui.Text("VRCX-0 Integration");
+            if (VRCXZeroDataService.IsAvailable)
+                ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "[OK] VRCX-0 database found - time together data enabled");
+            else
+                ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCX-0.sqlite3 not found - time together will show as '-'");
+
+            bool vrcxZeroDesktop = Program.config.VrcxZeroStartupDesktop;
+            if (ImGui.Checkbox("Launch with VRCX-0 (Desktop)", ref vrcxZeroDesktop))
+            {
+                Program.config.VrcxZeroStartupDesktop = vrcxZeroDesktop;
+                PlatformService.UpdateVrcxShortcut("Desktop", vrcxZeroDesktop, Paths.VrcxZeroStartup);
+                Program.SaveConfig();
+            }
+
+            bool vrcxZeroVr = Program.config.VrcxZeroStartupVr;
+            if (ImGui.Checkbox("Launch with VRCX-0 (VR)", ref vrcxZeroVr))
+            {
+                Program.config.VrcxZeroStartupVr = vrcxZeroVr;
+                PlatformService.UpdateVrcxShortcut("VR", vrcxZeroVr, Paths.VrcxZeroStartup);
+                Program.SaveConfig();
+            }
         }
 
         if (Directory.Exists(Paths.VrcNextBase))

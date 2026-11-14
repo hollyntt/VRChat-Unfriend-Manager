@@ -126,10 +126,18 @@ namespace VRCUFM
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
                 PlatformService.InstallLinuxDesktopEntry();
 
-            if (Directory.Exists(Paths.VrcxStartup))
+            // Legacy VRCX consumes shortcuts from %APPDATA%/VRCX/startup.
+            // Create/update these folders whenever integration is enabled or
+            // the database is present; VRCX itself creates them on first use.
+            if (VRCXDataService.IsAvailable || config.VrcxStartupDesktop || config.VrcxStartupVr)
             {
                 PlatformService.UpdateVrcxShortcut("desktop", config.VrcxStartupDesktop);
                 PlatformService.UpdateVrcxShortcut("vr", config.VrcxStartupVr);
+            }
+            if (VRCXZeroDataService.IsAvailable || config.VrcxZeroStartupDesktop || config.VrcxZeroStartupVr)
+            {
+                PlatformService.UpdateVrcxShortcut("Desktop", config.VrcxZeroStartupDesktop, Paths.VrcxZeroStartup);
+                PlatformService.UpdateVrcxShortcut("VR", config.VrcxZeroStartupVr, Paths.VrcxZeroStartup);
             }
 
             if (config.RunOnStartup) PlatformService.UpdateStartup(true);

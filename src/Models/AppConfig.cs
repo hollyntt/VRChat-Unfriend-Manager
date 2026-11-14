@@ -29,6 +29,8 @@ public class AppConfig
     public bool VrcxStartupVr { get; set; } = false;
     public bool VrcNextStartupDesktop { get; set; } = false;
     public bool VrcNextStartupVr { get; set; } = false;
+    public bool VrcxZeroStartupDesktop { get; set; } = false;
+    public bool VrcxZeroStartupVr { get; set; } = false;
     public bool HideInTaskbar { get; set; } = false;
     public List<string> ExcludedFavGroups { get; set; } = new();
     public bool AutoDeclineFriendRequests { get; set; } = false;

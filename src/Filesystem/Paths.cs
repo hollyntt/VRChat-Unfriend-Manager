@@ -72,6 +72,8 @@ public static class Paths
         }
     }
 
+    public static string VrcxZeroStartup => Path.Combine(VrcxZeroBase, "AutoStart");
+
     public static string VrcxZeroDataFile
     {
         get
