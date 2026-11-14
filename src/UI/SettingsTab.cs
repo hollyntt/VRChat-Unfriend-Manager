@@ -202,15 +202,6 @@ public static class SettingsTab
             }
         }
 
-        if (Directory.Exists(Paths.VrcxZeroBase) || VRCXZeroDataService.IsAvailable)
-        {
-            ImGui.Spacing();
-            ImGui.Text("VRCX-0 Integration");
-            if (VRCXZeroDataService.IsAvailable)
-                ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "[OK] VRCX-0 database found - time together data enabled");
-            else
-                ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCX-0.sqlite3 not found - time together will show as '-'");
-        }
 
         if (Directory.Exists(Paths.VrcxZeroBase) || VRCXZeroDataService.IsAvailable ||
             Program.config.VrcxZeroStartupDesktop || Program.config.VrcxZeroStartupVr)
