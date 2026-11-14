@@ -19,6 +19,8 @@
     *   **Pause/Resume:** Need to stop? Pause the operation at any time and resume when ready.
 *   **JSON Backups:** One-click backup of your currently displayed list to a timestamped `.json` file.
 *   **Auto Updater:** One-Click Update from one build to another simplified by a singular button.
+*   **VRCX Integration:** Automatically reads legacy VRCX's `VRCX.sqlite3` database, including custom locations configured through `VRCX_DatabaseLocation`, for time spent with friends.
+*   **VRCX-0 Integration:** Automatically reads VRCX-0's `VRCX-0.sqlite3` database for time spent with friends.
 ## 📋 Requirements
 
 *   **[.NET 6.0 Runtime (or newer)](https://dotnet.microsoft.com/en-us/download/dotnet/9.0)**

@@ -219,6 +219,15 @@ public static class SchedulerService
                                         timeMap[kv.Key] = existing + kv.Value;
                                     }
                                 }
+                                if (VRCXZeroDataService.IsAvailable)
+                                {
+                                    var xMap = VRCXZeroDataService.LoadTimeSpentSeconds();
+                                    foreach (var kv in xMap)
+                                    {
+                                        timeMap.TryGetValue(kv.Key, out var existing);
+                                        timeMap[kv.Key] = existing + kv.Value;
+                                    }
+                                }
                                 if (timeMap.Count == 0) timeMap = null;
                             }
 

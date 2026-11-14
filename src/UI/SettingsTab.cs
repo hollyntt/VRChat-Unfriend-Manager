@@ -180,9 +180,9 @@ public static class SettingsTab
             ImGui.Spacing();
             ImGui.Text("VRCX Integration");
             if (VRCXDataService.IsAvailable)
-                ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "[OK] VRCX database found - time together data enabled");
+                ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "[OK] Legacy VRCX database found - time together data enabled");
             else
-                ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCX.sqlite3 not found - time together will show as '-'");
+                ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "Legacy VRCX.sqlite3 not found - time together will show as '-'");
 
             bool vrcxDesktop = Program.config.VrcxStartupDesktop;
             if (ImGui.Checkbox("Launch with VRCX (Desktop)", ref vrcxDesktop))
@@ -199,6 +199,16 @@ public static class SettingsTab
                 PlatformService.UpdateVrcxShortcut("vr", vrcxVr);
                 Program.SaveConfig();
             }
+        }
+
+        if (Directory.Exists(Paths.VrcxZeroBase) || VRCXZeroDataService.IsAvailable)
+        {
+            ImGui.Spacing();
+            ImGui.Text("VRCX-0 Integration");
+            if (VRCXZeroDataService.IsAvailable)
+                ImGui.TextColored(new Vector4(0.4f, 0.9f, 0.5f, 1f), "[OK] VRCX-0 database found - time together data enabled");
+            else
+                ImGui.TextColored(new Vector4(1f, 0.6f, 0.3f, 1f), "VRCX-0.sqlite3 not found - time together will show as '-'");
         }
 
         if (Directory.Exists(Paths.VrcNextBase))

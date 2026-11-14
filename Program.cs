@@ -434,7 +434,7 @@ namespace VRCUFM
                 favGroupNames = await api.GetFavoriteGroupNamesAsync();
                 friends = await api.GetAllFriendsAsync();
 
-                if (VRCNextDataService.IsAvailable || VRCXDataService.IsAvailable)
+                if (VRCNextDataService.IsAvailable || VRCXDataService.IsAvailable || VRCXZeroDataService.IsAvailable)
                 {
                     status = "Loading time together data...";
                     var timeMap = await Task.Run(() =>
@@ -448,6 +448,12 @@ namespace VRCUFM
                             }
                         if (VRCXDataService.IsAvailable)
                             foreach (var kv in VRCXDataService.LoadTimeSpentSeconds())
+                            {
+                                merged.TryGetValue(kv.Key, out var ex);
+                                merged[kv.Key] = ex + kv.Value;
+                            }
+                        if (VRCXZeroDataService.IsAvailable)
+                            foreach (var kv in VRCXZeroDataService.LoadTimeSpentSeconds())
                             {
                                 merged.TryGetValue(kv.Key, out var ex);
                                 merged[kv.Key] = ex + kv.Value;

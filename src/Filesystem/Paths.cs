@@ -18,6 +18,89 @@ public static class Paths
 
     public static string VrcxStartup => Path.Combine(VrcxBase, "startup");
 
+    public static string VrcxDataFile
+    {
+        get
+        {
+            string defaultPath = Path.Combine(VrcxBase, "VRCX.sqlite3");
+            string configPath = Path.Combine(VrcxBase, "VRCX.json");
+            if (File.Exists(configPath))
+            {
+                try
+                {
+                    using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(configPath));
+                    if (document.RootElement.TryGetProperty("VRCX_DatabaseLocation", out var location)
+                        && location.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        var customPath = location.GetString()?.Trim();
+                        if (!string.IsNullOrWhiteSpace(customPath) && File.Exists(customPath))
+                            return customPath;
+                    }
+                }
+                catch { }
+            }
+
+            return defaultPath;
+        }
+    }
+
+    // VRCX-0 uses its own profile directory and database filename.
+    public static string VrcxZeroBase
+    {
+        get
+        {
+            string configDirectory;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+            {
+                string? xdgConfigHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+                configDirectory = !string.IsNullOrWhiteSpace(xdgConfigHome) && Path.IsPathFullyQualified(xdgConfigHome)
+                    ? xdgConfigHome
+                    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config");
+            }
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+            {
+                configDirectory = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    "Library", "Application Support");
+            }
+            else
+            {
+                configDirectory = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            }
+
+            return Path.Combine(configDirectory, "VRCX-0");
+        }
+    }
+
+    public static string VrcxZeroDataFile
+    {
+        get
+        {
+            string defaultPath = Path.Combine(VrcxZeroBase, "VRCX-0.sqlite3");
+            string pointerPath = Path.Combine(VrcxZeroBase, "VRCX-0.data-dir.json");
+            if (File.Exists(pointerPath))
+            {
+                try
+                {
+                    using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(pointerPath));
+                    if (document.RootElement.TryGetProperty("dataDir", out var dataDir)
+                        && dataDir.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        var customPath = dataDir.GetString();
+                        if (!string.IsNullOrWhiteSpace(customPath))
+                        {
+                            var customDb = Path.Combine(customPath, "VRCX-0.sqlite3");
+                            if (File.Exists(customDb)) return customDb;
+                        }
+                    }
+                }
+                catch { }
+            }
+
+            return defaultPath;
+        }
+    }
+
     public static string VrcNextBase
     {
         get
